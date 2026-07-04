@@ -2083,10 +2083,12 @@ cryptsetup erase /dev/sdX2
 
 # Option B: dd random data over the header region
 # Overwrites the first 32 MiB (covers the LUKS header + margin) — takes 5-10 seconds
-dd if=/dev/urandom of=/dev/sdX bs=4K count=8192 conv=fsync
+dd if=/dev/urandom of=/dev/sdX2 bs=4K count=8192 conv=fsync
 
 # Option C: erase and immediately power off — most complete
 cryptsetup erase /dev/sdX2 && sync && poweroff -f</code></pre>
+
+  <p class="note"><strong>Detached-header setups:</strong> destroy the detached header file/device and all header backups. Overwriting <code>/dev/sdX2</code> is not sufficient if copies of the detached header still exist, because those copies still contain the metadata and key material needed to attack or unlock the ciphertext.</p>
 
   <p>Create a ready-to-execute script and keyboard shortcut now, before you need it:</p>
 <pre><code">cat > /usr/local/bin/emergency-destroy.sh &lt;&lt; 'EOF'
@@ -2095,7 +2097,7 @@ echo "EMERGENCY DESTROY — 3 seconds to abort with Ctrl+C"
 sleep 3
 logger -t emergency "DESTRUCTION INITIATED"
 cryptsetup erase /dev/sdX2 2>/dev/null || true
-dd if=/dev/urandom of=/dev/sdX bs=4K count=8192 conv=fsync 2>/dev/null || true
+dd if=/dev/urandom of=/dev/sdX2 bs=4K count=8192 conv=fsync 2>/dev/null || true
 sync
 poweroff -f
 EOF
@@ -2131,7 +2133,7 @@ cat > /usr/local/bin/trigger-nuke.sh &lt;&lt; 'EOF'
 #!/bin/bash
 logger -t emergency "NUKE TRIGGERED at $(date)"
 cryptsetup erase /dev/sdX2 2>/dev/null || true
-dd if=/dev/urandom of=/dev/sdX bs=4K count=8192 conv=fsync 2>/dev/null || true
+dd if=/dev/urandom of=/dev/sdX2 bs=4K count=8192 conv=fsync 2>/dev/null || true
 sync
 poweroff -f
 EOF
