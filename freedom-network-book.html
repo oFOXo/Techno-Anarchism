@@ -8816,7 +8816,7 @@ echo "[!] Next: rebuild from scratch, rotate all keys, check correlated nodes."<
   │  ├─ HiddenServiceDir /var/lib/tor/matrix/   → :8448            │
   │  ├─ HiddenServiceDir /var/lib/tor/xmpp/     → :5222            │
   │  ├─ HiddenServiceDir /var/lib/tor/nostr/    → :7777            │
-  │  └─ HiddenServiceDir /var/lib/tor/ipfs/     → :5001            │
+  │  └─ HiddenServiceDir /var/lib/tor/ipfs/     → :8080            │
   │                                                                 │
   │  All mesh services remain on private IPs — zero clearnet        │
   └─────────────────────────────────────────────────────────────────┘</div>
@@ -8871,6 +8871,9 @@ HiddenServicePort 80   10.10.1.40:7777
 <span class="c">## ── IPFS API (read-only gateway) ────────────────────────────</span>
 HiddenServiceDir  /var/lib/tor/ipfs/
 HiddenServicePort 80   10.10.1.50:8080   <span class="c"># IPFS HTTP gateway, NOT admin API</span>
+
+<span class="c"># WARNING: never expose Kubo's admin API port (5001) over Tor unless it is</span>
+<span class="c"># explicitly locked down for administration with strong authentication and access controls.</span>
 
 <span class="c">## ── Admin SSH (emergency access) ────────────────────────────</span>
 HiddenServiceDir      /var/lib/tor/ssh/
