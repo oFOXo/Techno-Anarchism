@@ -417,8 +417,6 @@
   <p class="note">This means everything on the drive is captured forever at the moment of seizure. There is no "undo." Emergency destruction (Chapter 20) must happen before the drive is imaged, not after.</p>
 
   <h3>Phase 2: Automated Analysis</h3>
-  <p>After imaging, tools scan the image for known patterns:</p>
-
   <p><strong>Encryption detection:</strong> Commercial tools maintain databases of file signatures and encryption headers. LUKS2 is identified by the 6-byte magic sequence <code>4C 55 4B 53 BA BE</code> at the start of the partition. When detected, the LUKS header is automatically parsed, revealing:</p>
   <ul>
     <li>The exact cipher and mode (AES-XTS-256)</li>
@@ -2042,7 +2040,7 @@ dd if=/dev/urandom of=/dev/sdX bs=4K count=8192 conv=fsync
 cryptsetup erase /dev/sdX2 && sync && poweroff -f</code></pre>
 
   <p>Create a ready-to-execute script and keyboard shortcut now, before you need it:</p>
-<pre><code">cat > /usr/local/bin/emergency-destroy.sh &lt;&lt; 'EOF'
+<pre><code>cat > /usr/local/bin/emergency-destroy.sh &lt;&lt; 'EOF'
 #!/bin/bash
 echo "EMERGENCY DESTROY — 3 seconds to abort with Ctrl+C"
 sleep 3
@@ -2079,7 +2077,7 @@ bindsym Ctrl+Alt+End exec /usr/local/bin/emergency-destroy.sh
   </ul>
 
   <h3>Method 3: Pre-Staged Destruction</h3>
-<pre><code"># One-button, no-confirmation destruction script — use with caution
+<pre><code># One-button, no-confirmation destruction script — use with caution
 cat > /usr/local/bin/trigger-nuke.sh &lt;&lt; 'EOF'
 #!/bin/bash
 logger -t emergency "NUKE TRIGGERED at $(date)"
@@ -2156,7 +2154,7 @@ cryptsetup-nuke-list /dev/sdX2
   <p>A dead man's switch (DMS) automatically destroys the drive's key material if you fail to "check in" within a defined window. This protects against scenarios where you are detained or incapacitated without the opportunity to trigger destruction manually — you simply stop checking in, and the system acts on your behalf.</p>
 
   <h3>The Check-In Daemon</h3>
-<pre><code"># Configuration file
+<pre><code># Configuration file
 mkdir -p /etc/deadman
 cat > /etc/deadman/config &lt;&lt; 'EOF'
 CHECKIN_INTERVAL=43200    # 12 hours — maximum time between check-ins
@@ -2353,7 +2351,7 @@ systemctl restart tor</code></pre>
 
   <h3>Tor Browser: Correct Usage</h3>
   <p>Running a standard browser (Firefox, Chromium) with Tor as a proxy is significantly less secure than Tor Browser. Tor Browser is hardened specifically to prevent browser fingerprinting — techniques that identify individual users based on browser characteristics (installed fonts, screen resolution, plugin list, canvas rendering, WebGL behavior, time zone) even across Tor circuits.</p>
-<pre><code"># Verify before running
+<pre><code># Verify before running
 gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org
 gpg --verify tor-browser-linux-x86_64-*.tar.xz.asc tor-browser-linux-x86_64-*.tar.xz
 
@@ -2452,7 +2450,7 @@ HandleLidSwitchDocked=poweroff
 systemctl restart systemd-logind</code></pre>
 
   <p><strong>Screen lock on every departure.</strong> Build the habit of locking the screen every time you step away — even for thirty seconds. An unlocked screen is an opportunity. Configure the lock shortcut:</p>
-<pre><code"># In ~/.config/sway/config:
+<pre><code># In ~/.config/sway/config:
 bindsym $mod+l exec swaylock -f -c 000000
 
 # Lock immediately on screen blank too (belt and suspenders):
@@ -2529,7 +2527,7 @@ flatpak update org.signal.Signal</code></pre>
 
   <h3>GPG for Encrypted Email</h3>
   <p>SMTP email is transmitted in cleartext between servers by default. GPG provides end-to-end encryption at the message level — the server never sees the message content, only the encrypted payload.</p>
-<pre><code">pacman -S gnupg thunderbird
+<pre><code>pacman -S gnupg thunderbird
 
 # Generate an Ed25519 key pair (modern elliptic curve — faster and more secure than RSA 2048)
 gpg --expert --full-generate-key
