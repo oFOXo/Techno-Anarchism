@@ -623,25 +623,49 @@ smartctl -a /dev/sdX | grep -E "Firmware|Model|Serial"
   </ul>
 
   <h3>Verifying the Arch Linux Installation Image</h3>
-  <p>A compromised ISO containing a backdoored installer would be invisible during installation but would compromise every passphrase you enter. Always verify before use:</p>
-<pre><code># Step 1: Download ISO and signature from archlinux.org
+  <p>A compromised ISO containing a backdoored installer would be invisible during installation but would compromise every passphrase you enter. Always verify before use. Because Arch Linux release signing keys can change, do not rely on a single hardcoded key ID from this guide; identify the key used for the release you actually downloaded, then verify that key against current Arch Linux documentation.</p>
+<pre><code># Step 1: Start at Arch's official release/download page.
+# Open https://archlinux.org/download/ and note the current release filename,
+# the PGP signature link, and the listed PGP fingerprint for that release.
+# Download the ISO and its matching .sig from that official page or an
+# official mirror linked from it. Example using Arch's latest redirect:
 wget https://archlinux.org/iso/latest/archlinux-x86_64.iso
 wget https://archlinux.org/iso/latest/archlinux-x86_64.iso.sig
 
-# Step 2: Import the release signing key from the keyserver
-gpg --keyserver hkps://keys.openpgp.org --recv-keys 3056513887B78AEB
+# Step 2: Identify the signing key from the detached signature BEFORE trusting it.
+# This prints the issuer fingerprint if the signature contains it.
+gpg --list-packets archlinux-x86_64.iso.sig | sed -n 's/.*issuer fpr v4 //p'
 
-# Step 3: MANUALLY verify the fingerprint against https://archlinux.org/people/developers/
-gpg --fingerprint 3056513887B78AEB
-# Expected fingerprint: 4AA4 767B BC9C 4B1D 18AE  28B7 7F2D 434B 9741 E8AC
-# DO NOT PROCEED if the fingerprint does not match exactly
-
-# Step 4: Verify the signature on the ISO
+# If your GnuPG output only shows a long key ID, record that instead:
 gpg --verify archlinux-x86_64.iso.sig archlinux-x86_64.iso
-# Must show: "Good signature from Pierre Schmitz &lt;pierre@archlinux.de&gt;"
-# Any other result — including "Bad signature" — means the ISO is untrustworthy</code></pre>
+# Expected at this stage if the key is not imported: "Can't check signature:
+# No public key" plus a key ID or fingerprint. That identifies which key to fetch.
 
-  <p class="warn">The fingerprint verification step (Step 3) is not optional. A compromised keyserver could serve a malicious key that would produce a "Good signature" from the wrong key. The fingerprint must be verified against the developer list on archlinux.org from a trusted connection — ideally from a different network than the one used to download the ISO.</p>
+# Step 3: Fetch that exact key. Prefer a full fingerprint when available.
+# Replace &lt;SIGNING_FINGERPRINT_OR_LONG_KEY_ID&gt; with the value from Step 2.
+gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys &lt;SIGNING_FINGERPRINT_OR_LONG_KEY_ID&gt;
+
+# Step 4: Verify the fetched key's fingerprint against current Arch Linux
+# official signing information, not against this guide. Check:
+#   - https://archlinux.org/download/                 (release PGP fingerprint)
+#   - https://archlinux.org/people/developers/        (developer key list)
+#   - https://archlinux.org/master-keys/              (master-key trust info)
+gpg --fingerprint &lt;SIGNING_FINGERPRINT_OR_LONG_KEY_ID&gt;
+# DO NOT PROCEED unless the full fingerprint exactly matches current Arch
+# documentation for the release signer. A matching short key ID is insufficient.
+
+# Step 5: Verify the signature on the ISO.
+gpg --verify archlinux-x86_64.iso.sig archlinux-x86_64.iso
+# Proceed only if GnuPG reports a good signature made by the same verified key.
+# Do not require a specific person's name unless Arch's current release page and
+# developer/release-signing documentation say that signer is current for your ISO.
+
+# DATED EXAMPLE ONLY (checked 2026-07-04): the Arch download page for release
+# 2026.07.01 listed PGP fingerprint 3E80 CA1A 8B89 F69C BA57 D98A 76A5 EF90
+# 5444 9A5C for Pierre Schmitz &lt;pierre@archlinux.org&gt;. Verify this against
+# current Arch documentation before use; it is an example, not a standing rule.</code></pre>
+
+  <p class="warn">The fingerprint verification step is not optional. A compromised keyserver could serve a malicious key that would produce a "Good signature" from the wrong key. The full fingerprint must be verified against current Arch Linux signing information from a trusted connection — ideally from a different network than the one used to download the ISO. Treat the dated example above only as a worked example; the correct signer for a future Arch ISO may be different.</p>
 
   <p>For maximum assurance, compare the ISO SHA-256 hash from three different sources: the Arch Linux website, the mirror you downloaded from, and a trusted third-party mirror. All three must match.</p>
 
