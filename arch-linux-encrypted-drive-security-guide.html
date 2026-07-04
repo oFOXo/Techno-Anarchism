@@ -533,19 +533,28 @@ hashcat -m 32100 -a 0 header.img targeted.txt</code></pre>
   </table>
 
   <h3>Recommended Enclosures</h3>
-  <p>Key requirements: UASP support (required for performance), TRIM passthrough (required for drive health and counter-forensics), no firmware interception of commands.</p>
+  <p>Key requirements: UASP support (required for performance), working Linux discard support (useful when your threat model allows TRIM), and no firmware interception of commands.</p>
   <table>
     <tr><th>Enclosure</th><th>Notes</th></tr>
-    <tr><td>Sabrent EC-UASP</td><td>USB 3.2 Gen 1, UASP, widely available, no known quirks with Linux TRIM passthrough.</td></tr>
+    <tr><td>Sabrent EC-UASP</td><td>USB 3.2 Gen 1, UASP, widely available, no known quirks with Linux discard support.</td></tr>
     <tr><td>Inateck FE2011</td><td>Compact, toolless entry, solid build quality.</td></tr>
     <tr><td>OWC Express USB-C</td><td>Higher build quality; good Linux compatibility record.</td></tr>
     <tr><td>ORICO 2139C3 (transparent)</td><td>The transparent shell lets you visually inspect the PCB for unexpected hardware without opening the enclosure — useful for anti-tamper checks.</td></tr>
   </table>
 
-  <p>Verify TRIM passthrough is functional after connecting the drive:</p>
+  <h3>TRIM / Discard Decision</h3>
+  <p>Use the same TRIM/discard recommendation here and in Chapter 12: enable it for normal encrypted-system maintenance, disable it when allocation-pattern concealment matters more, and prefer periodic manual <code>fstrim</code> over continuous <code>discard</code> when you want performance maintenance with less continuous leakage.</p>
+  <table>
+    <tr><th>Threat-model goal</th><th>Recommendation</th><th>Reason</th></tr>
+    <tr><td>Performance, SSD longevity, and normal encrypted-system use</td><td>Enable TRIM/discard</td><td>Allows the SSD to clean unused blocks, maintain write performance, and reduce unnecessary wear.</td></tr>
+    <tr><td>Plausible deniability, hidden volumes, or allocation-pattern concealment</td><td>Disable TRIM/discard</td><td>Prevents discarded-block maps from revealing which regions are unused or disrupting hidden-volume assumptions.</td></tr>
+    <tr><td>Performance maintenance with less continuous leakage</td><td>Prefer periodic manual <code>fstrim</code> over continuous <code>discard</code></td><td>Batches discard events instead of exposing allocation changes as they happen.</td></tr>
+  </table>
+
+  <p>Verify discard support after connecting the drive if you plan to enable TRIM or run periodic <code>fstrim</code>:</p>
 <pre><code>lsblk --discard /dev/sdX
 # DISC-GRAN and DISC-MAX must both be non-zero
-# A zero value means TRIM is not passing through the enclosure</code></pre>
+# A zero value means discard is not passing through the enclosure</code></pre>
 </section>
 
 <!-- Chapter 4 -->
@@ -789,6 +798,8 @@ wget https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
   </ul>
 
   <h3>Creating the LUKS2 Volume</h3>
+
+  <p><strong>Recommended boot-root profile: LUKS2 + Argon2id, without dm-integrity.</strong> Use this for the root filesystem you expect your bootloader and initramfs to unlock reliably. It preserves broad compatibility while still using a strong memory-hard PBKDF.</p>
 <pre><code>cryptsetup luksFormat \
   --type luks2 \
   --cipher aes-xts-plain64 \
@@ -798,13 +809,29 @@ wget https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
   --pbkdf-memory 4194304 \
   --pbkdf-parallel 4 \
   --pbkdf-force-iterations 6 \
-  --iter-time 10000 \
-  --integrity hmac-sha256 \
   --sector-size 4096 \
   /dev/sdX2
 
 # You must type YES (uppercase) to confirm
 # Then enter your diceware passphrase twice</code></pre>
+
+  <p><strong>Advanced authenticated-encryption profile: LUKS2 + Argon2id + dm-integrity.</strong> Use this only after confirming your exact boot chain supports it: firmware, bootloader strategy, kernel, initramfs generator, cryptsetup hooks, kernel command line, and recovery media. Many bootloaders cannot unlock LUKS2 volumes that use dm-integrity directly; even when the bootloader only loads an unencrypted kernel and initramfs from the EFI System Partition, the initramfs must still include the right modules and cryptsetup support to activate the root volume.</p>
+<pre><code>cryptsetup luksFormat \
+  --type luks2 \
+  --cipher aes-xts-plain64 \
+  --key-size 512 \
+  --hash sha512 \
+  --pbkdf argon2id \
+  --pbkdf-memory 4194304 \
+  --pbkdf-parallel 4 \
+  --pbkdf-force-iterations 6 \
+  --integrity hmac-sha256 \
+  --sector-size 4096 \
+  /dev/sdX2</code></pre>
+
+  <div class="warning">
+    <strong>Do not choose dm-integrity casually.</strong> It consumes additional space for per-sector authentication tags and metadata, increases writes and write amplification, can reduce SSD endurance, and makes disaster recovery more complex because corruption, missing integrity metadata, or unsupported recovery environments can turn reads into I/O errors instead of returning unauthenticated plaintext. Test this profile on the actual target hardware and with the exact rescue media you plan to rely on before storing sensitive data.
+  </div>
 
   <p><strong>Every parameter explained — do not skip this section:</strong></p>
 
@@ -818,13 +845,17 @@ wget https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
   Argon2id won the Password Hashing Competition in 2015 after peer review by hundreds of cryptographers. It is a memory-hard function — correctly computing it requires holding a configurable amount of RAM (not just time). This is decisive against GPU-based and ASIC-based attacks. A GPU cluster that can test billions of SHA-256 hashes per second is constrained by available RAM when testing Argon2id — each attempt requires holding the full memory parameter simultaneously. Argon2id specifically combines two Argon2 variants to resist both side-channel attacks (from the "Argon2i" component) and time-memory tradeoff attacks (from the "Argon2d" component).</p>
 
   <p><code>--pbkdf-memory 4194304</code><br>
-  4,194,304 KiB = 4 GiB of RAM required per password attempt. This is the primary cost that makes GPU cracking impractical. A GPU with 24 GB VRAM can test only 6 passwords in parallel. Compare this to SHA-256, where the same GPU can test billions in parallel. The 4 GiB parameter also means this unlock will be slow on your own machine (10+ seconds) — this is intentional and appropriate.</p>
+  4,194,304 KiB = 4 GiB of RAM required per password attempt. This is the primary cost that makes GPU cracking impractical. A GPU with 24 GB VRAM can test only 6 passwords in parallel. Compare this to SHA-256, where the same GPU can test billions in parallel. The 4 GiB parameter also means this unlock will be slow on your own machine (10+ seconds) — this is intentional and appropriate on machines that can spare the memory during early boot.</p>
 
-  <p><code>--pbkdf-force-iterations 6</code> and <code>--iter-time 10000</code><br>
-  Six passes over the full 4 GiB memory region, plus 10 seconds of time-based computation regardless of hardware speed. Together, a single unlock attempt takes at minimum 10–15 seconds on modern hardware. This further compounds the Argon2id protection.</p>
+  <div class="warning">
+    <strong>RAM compatibility warning:</strong> <code>--pbkdf-memory 4194304</code> can fail on systems with limited RAM, firmware-reserved memory, memory-constrained initramfs environments, or rescue media that cannot allocate 4 GiB at unlock time. Before storing sensitive data, boot the installed system and your recovery media, then verify that you can unlock the volume from the target initramfs. If it fails, recreate the volume with a lower memory value that your real boot environment can reliably allocate.
+  </div>
 
-  <p><code>--integrity hmac-sha256</code><br>
-  Enables dm-integrity: every 4096-byte sector of encrypted data receives an HMAC-SHA256 authentication tag. If any byte of ciphertext is modified on disk — whether by accident, by a forensic tool probing the cipher, or by a sophisticated active attack — the integrity check fails and the read returns an I/O error rather than silently returning potentially useful modified plaintext. This closes a class of "chosen-ciphertext attacks" where an adversary who can modify the encrypted data and observe the system's behavior can learn information about the plaintext.</p>
+  <p><code>--pbkdf-force-iterations 6</code><br>
+  This guide uses a fixed Argon2id cost: six passes over the full 4 GiB memory region. It does <em>not</em> also use <code>--iter-time</code> as an additional stacked delay. In cryptsetup, <code>--iter-time</code> is the calibration mode: cryptsetup benchmarks the current machine and chooses a PBKDF cost intended to take approximately that long. <code>--pbkdf-force-iterations</code> bypasses that calibration and records the explicit cost you requested. Choose one approach. This guide chooses fixed iterations so the documented LUKS header has predictable Argon2 parameters; if you prefer hardware-calibrated unlock time, omit <code>--pbkdf-force-iterations</code> and use <code>--iter-time 10000</code> instead.</p>
+
+  <p><code>--integrity hmac-sha256</code> <strong>(advanced profile only)</strong><br>
+  Enables dm-integrity: every 4096-byte sector of encrypted data receives an HMAC-SHA256 authentication tag. If any byte of ciphertext is modified on disk — whether by accident, by a forensic tool probing the cipher, or by a sophisticated active attack — the integrity check fails and the read returns an I/O error rather than silently returning potentially useful modified plaintext. This closes a class of "chosen-ciphertext attacks" where an adversary who can modify the encrypted data and observe the system's behavior can learn information about the plaintext. The tradeoff is operational: extra metadata reduces usable capacity, every write must update integrity data, unsupported boot or rescue environments may not open the volume, and recovery becomes harder after corruption.</p>
 
   <p><code>--sector-size 4096</code><br>
   Modern SSDs use 4096-byte physical sectors internally. Aligning the LUKS sector size to 4096 bytes ensures each encrypted sector maps directly to one physical sector, maximizing performance and eliminating read-modify-write cycles.</p>
@@ -943,7 +974,7 @@ EDITOR=vim visudo
 # Uncomment: %wheel ALL=(ALL:ALL) ALL</code></pre>
 
   <h3>Configure the initramfs for Encryption</h3>
-  <p>The initramfs is the minimal Linux environment that runs before the real root filesystem is mounted. It must contain the LUKS unlocking logic — the <code>encrypt</code> hook — or the system will not know how to decrypt the drive at boot.</p>
+  <p>The initramfs is the minimal Linux environment that runs before the real root filesystem is mounted. The example below prepares the GRUB + mkinitcpio <code>encrypt</code> hook profile. If you choose the UKI + Secure Boot + systemd initramfs profile in Chapter 9, replace this with that profile's <code>systemd</code>/<code>sd-encrypt</code> hook set and <code>/etc/crypttab.initramfs</code> flow.</p>
 <pre><code>vim /etc/mkinitcpio.conf
 
 # Find the HOOKS line and set it to exactly:
@@ -965,21 +996,38 @@ mkinitcpio -P
     <h2>Bootloader Hardening</h2>
   </div>
 
-  <h3>Install GRUB</h3>
+  <p>This guide supports two boot profiles. Choose one and keep its initramfs hooks, kernel command line, and unlock tooling consistent. Do not mix the GRUB <code>encrypt</code> hook profile with systemd TPM2/FIDO2 enrollment and expect it to work as a drop-in change; TPM2 auto-unlock is covered later in <a href="#ch19">Chapter 19</a> for the UKI + systemd profile.</p>
+
+  <h3>Supported Boot Profile 1: GRUB + mkinitcpio encrypt hook</h3>
+  <p>This profile is the classic Arch encrypted-root flow. GRUB loads the kernel and initramfs, then the mkinitcpio <code>encrypt</code> hook reads <code>cryptdevice=</code> from the kernel command line and prompts for the LUKS passphrase.</p>
+
+  <h4>Initramfs hooks</h4>
+<pre><code>vim /etc/mkinitcpio.conf
+
+# Use the busybox-based encrypt hook profile:
+HOOKS=(base udev autodetect keyboard keymap consolefont modconf block encrypt filesystems fsck)
+
+# Ordering matters:
+# - keyboard/keymap before encrypt: passphrase entry works early in boot
+# - block before encrypt: storage devices exist before LUKS is opened
+# - encrypt before filesystems: root is decrypted before it is mounted
+
+mkinitcpio -P</code></pre>
+
+  <h4>Install and configure GRUB</h4>
 <pre><code>grub-install \
   --target=x86_64-efi \
   --efi-directory=/boot \
   --bootloader-id=GRUB \
-  --recheck</code></pre>
+  --recheck
 
-  <h3>Configure GRUB for Encrypted Boot</h3>
-<pre><code># Get the UUID of your encrypted partition
+# Get the UUID of your encrypted partition
 blkid /dev/sdX2
-# Copy the UUID value (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+# Copy the UUID value, not the filesystem UUID inside the opened mapper device
 
 vim /etc/default/grub</code></pre>
 
-  <p>Set <code>GRUB_CMDLINE_LINUX</code> to the following (replace <code>&lt;UUID&gt;</code> with your actual UUID):</p>
+  <p>Set <code>GRUB_CMDLINE_LINUX</code> to include the mkinitcpio <code>encrypt</code> hook parameters. Replace <code>&lt;UUID&gt;</code> with the UUID of the LUKS partition:</p>
 <pre><code>GRUB_CMDLINE_LINUX="cryptdevice=UUID=&lt;UUID&gt;:cryptroot root=/dev/mapper/cryptroot \
   init_on_alloc=1 \
   init_on_free=1 \
@@ -992,7 +1040,7 @@ vim /etc/default/grub</code></pre>
   iommu=force \
   intel_iommu=on \
   nohibernate \
-  mitigations=auto"</code></pre>
+  mitigations=auto"
 
   <table>
     <tr><th>Parameter</th><th>What It Prevents</th></tr>
@@ -1008,11 +1056,11 @@ vim /etc/default/grub</code></pre>
   </table>
 
 <pre><code>grub-mkconfig -o /boot/grub/grub.cfg</code></pre>
+grub-mkconfig -o /boot/grub/grub.cfg</code></pre>
 
-  <h3>GRUB Password Protection</h3>
-  <p>Without a GRUB password, anyone who reaches the GRUB menu can press <code>e</code> to edit the boot entry, add <code>init=/bin/bash</code> to the kernel command line, and boot directly to a root shell. The LUKS encryption would still protect the data on disk, but the attacker could modify the bootloader for a future evil maid attack (Chapter 18) without leaving obvious traces.</p>
-<pre><code># Generate a PBKDF2-hashed GRUB password
-grub-mkpasswd-pbkdf2
+  <h4>GRUB password protection</h4>
+  <p>Without a GRUB password, anyone who reaches the GRUB menu can press <code>e</code>, edit the boot entry, add dangerous kernel parameters, or prepare a future evil maid attack. A password raises the bar for interactive menu tampering, but it does not by itself authenticate the files GRUB reads from the EFI partition.</p>
+<pre><code>grub-mkpasswd-pbkdf2
 # Enter and confirm your GRUB menu password
 # Copy the output hash (starts with: grub.pbkdf2.sha512.10000...)
 
@@ -1023,75 +1071,99 @@ EOF
 
 grub-mkconfig -o /boot/grub/grub.cfg</code></pre>
 
-  <h3>Unified Kernel Images</h3>
-  <p>A standard GRUB configuration has a meaningful security gap: <code>grub.cfg</code> is an unsigned, unencrypted text file on the EFI partition. An attacker with a few minutes of physical access can edit it — changing kernel parameters, adding <code>init=/bin/bash</code>, or pointing GRUB at a different kernel — without triggering Secure Boot, because GRUB itself is signed but the config file it reads is not.</p>
-  <p>A Unified Kernel Image (UKI) solves this by embedding the kernel command line, the initramfs, and the kernel itself into a single EFI binary. The entire binary is Secure Boot signed. Any modification — including changing a single character of the kernel command line — invalidates the signature and causes the UEFI firmware to refuse to boot it.</p>
-<pre><code>pacman -S ukify
+  <p class="warn"><strong>Remaining risk:</strong> in a standard GRUB installation, <code>/boot/grub/grub.cfg</code> is an unsigned text file. Secure Boot may verify the GRUB EFI binary, but an attacker who can modify <code>grub.cfg</code> can still alter boot entries unless GRUB is configured to verify a signed configuration, the configuration is protected by another integrity mechanism, or you choose the signed UKI profile below.</p>
 
-# Write the kernel command line to a file for embedding
+  <h3>Supported Boot Profile 2: UKI + Secure Boot + systemd initramfs</h3>
+  <p>This profile uses a signed Unified Kernel Image (UKI) containing the kernel, initramfs, and kernel command line. The firmware verifies the UKI signature before execution, so changing the embedded command line, kernel, or initramfs invalidates the signature. Use this profile when you want the TPM2 or FIDO2 unlock flows described in <a href="#ch19">Chapter 19</a>.</p>
+
+  <h4>Boot path: remove or bypass GRUB</h4>
+  <p>The recommended UKI path is to boot the signed UKI directly from UEFI and remove GRUB from the normal boot path. You may leave GRUB installed only as a disabled recovery entry, but do not use unsigned GRUB menu entries as the primary path. If a firmware cannot boot the UKI directly, GRUB should only chainload the already signed UKI and must not provide an editable unsigned kernel command line.</p>
+
+  <h3>Secure Boot with Custom Keys</h3>
+  <p>Default Secure Boot uses Microsoft's signing keys. This means Microsoft can sign software that boots on your machine — and by extension, so can anyone who compromises Microsoft's infrastructure or obtains a code-signing certificate under their CA hierarchy. For your threat model, decide whether you want maximum owner control or broader hardware compatibility.</p>
+<pre><code>pacman -S sbctl
+  <h4>systemd initramfs hooks and crypttab flow</h4>
+<pre><code>vim /etc/mkinitcpio.conf
+
+# Use the systemd-based initramfs profile for TPM2/FIDO2 unlocking:
+HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt filesystems fsck)
+
+mkinitcpio -P
+
+# Identify the LUKS partition UUID
+blkid /dev/sdX2
+
+# Option 1: maximum control. Enroll only your keys.
+# Only owner-signed EFI binaries should boot, but some hardware,
+# expansion-card option ROMs, firmware updaters, or recovery workflows may break.
+sbctl enroll-keys
+
+# Option 2: compatibility mode. Enroll your keys and preserve Microsoft's keys.
+# Microsoft-signed binaries remain trusted, which improves compatibility with some
+# drivers and option ROMs but weakens any "only I can sign boot code" claim.
+# Use this instead of the maximum-control command if your hardware requires it.
+# sbctl enroll-keys --microsoft
+# Configure systemd-cryptsetup in the initramfs.
+# For passphrase-only boot, omit the fido2/tpm2 options.
+cat > /etc/crypttab.initramfs &lt;&lt; 'EOF'
+cryptroot UUID=&lt;UUID&gt; - luks
+EOF</code></pre>
+
+  <p>When FIDO2 or TPM2 unlock is recommended, enroll with <code>systemd-cryptenroll</code> and express the unlock method in <code>/etc/crypttab.initramfs</code>, not with the GRUB-only <code>cryptdevice=</code> syntax:</p>
+<pre><code># FIDO2 example; see Chapter 17 for token enrollment details
+systemd-cryptenroll --fido2-device=auto --fido2-with-client-pin=yes /dev/sdX2
+printf 'cryptroot UUID=&lt;UUID&gt; - luks,fido2-device=auto\n' > /etc/crypttab.initramfs
+
+# TPM2 example; Chapter 19 gives the full TPM2 procedure and PCR selection
+systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+1+7 /dev/sdX2
+printf 'cryptroot UUID=&lt;UUID&gt; - luks,tpm2-device=auto\n' > /etc/crypttab.initramfs
+
+mkinitcpio -P</code></pre>
+
+  <h4>Build and sign the UKI</h4>
+<pre><code>pacman -S ukify sbctl
+
 cat > /etc/kernel/cmdline &lt;&lt; 'EOF'
-cryptdevice=UUID=&lt;UUID&gt;:cryptroot root=/dev/mapper/cryptroot init_on_alloc=1 init_on_free=1 vsyscall=none debugfs=off lockdown=confidentiality module.sig_enforce=1 iommu=force intel_iommu=on nohibernate mitigations=auto
+root=/dev/mapper/cryptroot init_on_alloc=1 init_on_free=1 page_alloc.shuffle=1 randomize_kstack_offset=on vsyscall=none debugfs=off lockdown=confidentiality module.sig_enforce=1 iommu=force intel_iommu=on nohibernate mitigations=auto
 EOF
 
-# Build and sign the UKI (requires Secure Boot keys from the next step)
+# Generate and enroll custom Secure Boot keys if you have not already done so
+sbctl status
+sbctl create-keys
+sbctl enroll-keys --microsoft
+
 ukify build \
   --linux=/boot/vmlinuz-linux-hardened \
   --initrd=/boot/initramfs-linux-hardened.img \
   --cmdline=@/etc/kernel/cmdline \
-  --secureboot-private-key=/path/to/db.key \
-  --secureboot-certificate=/path/to/db.crt \
-  --output=/boot/EFI/Linux/arch-hardened.efi</code></pre>
+  --secureboot-private-key=/usr/share/secureboot/keys/db/db.key \
+  --secureboot-certificate=/usr/share/secureboot/keys/db/db.pem \
+  --output=/boot/EFI/Linux/arch-hardened.efi
 
-  <h3>Secure Boot with Custom Keys</h3>
-  <p>Default Secure Boot uses Microsoft's signing keys. This means Microsoft can sign software that boots on your machine — and by extension, so can anyone who compromises Microsoft's infrastructure or obtains a code-signing certificate under their CA hierarchy. For your threat model, you want Secure Boot controlled entirely by you: only software you signed can boot.</p>
-<pre><code>pacman -S sbctl
-
-# Check the current Secure Boot enrollment state
-sbctl status
-
-# In UEFI firmware: Security → Secure Boot → Clear Keys / Enter Setup Mode
-# (exact menu path varies by manufacturer)
-
-# Generate your custom Platform Key (PK), Key Exchange Key (KEK), and Database key (db)
-sbctl create-keys
-
-# Enroll your keys; --microsoft preserves Microsoft's keys for hardware compatibility
-# (some drivers and option ROMs require Microsoft's key)
-sbctl enroll-keys --microsoft
-
-# Sign all boot-relevant EFI binaries and record their paths
-sbctl sign -s /boot/EFI/GRUB/grubx64.efi
-sbctl sign -s /boot/grub/x86_64-efi/grub.efi
-sbctl sign -s /boot/vmlinuz-linux-hardened
 sbctl sign -s /boot/EFI/Linux/arch-hardened.efi
+sbctl verify</code></pre>
 
-# Verify all are signed
-sbctl verify
-
-# In UEFI firmware: re-enable Secure Boot
-
-# Automate re-signing when the kernel or bootloader is updated:
-cat > /etc/pacman.d/hooks/zz-sbctl-sign.hook &lt;&lt; 'EOF'
-[Trigger]
-Operation = Install
-Operation = Upgrade
-Type = Path
-Target = usr/lib/modules/*/vmlinuz
-Target = boot/*.efi
-
-[Action]
-Description = Re-signing EFI binaries after update
-When = PostTransaction
-Exec = /usr/bin/sbctl sign-all -g
-EOF</code></pre>
+  <h3>Kernel Security Parameters</h3>
+  <table>
+    <tr><th>Parameter</th><th>What It Prevents</th></tr>
+    <tr><td><code>init_on_alloc=1</code></td><td>Zeroes memory before allocating it. Prevents newly allocated buffers from exposing old memory contents.</td></tr>
+    <tr><td><code>init_on_free=1</code></td><td>Zeroes memory after freeing it. Reduces data exposure from use-after-free bugs.</td></tr>
+    <tr><td><code>vsyscall=none</code></td><td>Disables the legacy fixed-address vsyscall interface, a common code-reuse target.</td></tr>
+    <tr><td><code>debugfs=off</code></td><td>Prevents debugfs from exposing kernel internals to privileged users or compromised services.</td></tr>
+    <tr><td><code>lockdown=confidentiality</code></td><td>Restricts interfaces that can expose or modify kernel memory, even to root.</td></tr>
+    <tr><td><code>module.sig_enforce=1</code></td><td>Rejects unsigned kernel modules.</td></tr>
+    <tr><td><code>iommu=force</code></td><td>Forces DMA isolation for capable hardware.</td></tr>
+    <tr><td><code>nohibernate</code></td><td>Prevents writing RAM contents, including disk keys, to a hibernation image.</td></tr>
+    <tr><td><code>mitigations=auto</code></td><td>Enables CPU vulnerability mitigations appropriate for the detected processor.</td></tr>
+  </table>
 
   <h3>Finishing the Installation</h3>
-<pre><code>exit              # exit the chroot environment
-umount -R /mnt    # unmount all filesystems cleanly
-cryptsetup close cryptroot   # close the LUKS container
-reboot            # remove the installer USB before the machine POST-boots</code></pre>
+<pre><code>exit
+umount -R /mnt
+cryptsetup close cryptroot
+reboot</code></pre>
 
-  <p>On reboot, the machine should boot from the SATA-to-USB drive, display the GRUB menu (password-protected), prompt for your LUKS passphrase, and complete the boot. If it does not work, boot back from the installer, open the LUKS container, mount the filesystems, chroot in, and troubleshoot the GRUB configuration and initramfs hooks.</p>
+  <p>On reboot, verify that the machine follows the boot profile you selected: either password-protected GRUB loads the mkinitcpio <code>encrypt</code> hook profile, or UEFI launches the signed UKI directly and the systemd initramfs unlocks <code>cryptroot</code>. If TPM2 auto-unlock is desired, complete <a href="#ch19">Chapter 19</a> after confirming the UKI profile boots manually.</p>
 </section>
 
 <!-- Chapter 10 -->
@@ -1408,15 +1480,24 @@ hashcat -m 32100 -a 0 header.img wordlist.txt -r best64.rule
   <h3>TRIM on an Encrypted Drive: Trade-offs</h3>
   <p>TRIM is a command the OS sends to the SSD saying "these blocks are no longer in use; you may erase them." It helps maintain SSD performance over time by allowing the FTL to pre-erase blocks before they need to be rewritten.</p>
   <p><strong>Security trade-off:</strong> TRIM leaks information to a physical attacker. By analyzing which logical blocks the SSD reports as discarded, a forensic examiner who accesses the NAND directly can determine the approximate size and layout of your filesystem's used space — even without decrypting anything. They cannot read the data, but they can infer patterns.</p>
-  <p>For most threat models, TRIM provides a net benefit (drive health + some anti-forensic clearing) and should be enabled. For maximum deniability with hidden VeraCrypt volumes (Chapter 15), disable TRIM — a hidden volume must make the outer volume's unallocated space indistinguishable from random data, which TRIM can disrupt.</p>
-<pre><code># Enable TRIM passthrough in /etc/crypttab (most threat models):
+  <p>Use the same TRIM/discard recommendation here and in Chapter 3: enable it for normal encrypted-system maintenance, disable it when allocation-pattern concealment matters more, and prefer periodic manual <code>fstrim</code> over continuous <code>discard</code> when you want performance maintenance with less continuous leakage.</p>
+  <table>
+    <tr><th>Threat-model goal</th><th>Recommendation</th><th>Reason</th></tr>
+    <tr><td>Performance, SSD longevity, and normal encrypted-system use</td><td>Enable TRIM/discard</td><td>Allows the SSD to clean unused blocks, maintain write performance, and reduce unnecessary wear.</td></tr>
+    <tr><td>Plausible deniability, hidden volumes, or allocation-pattern concealment</td><td>Disable TRIM/discard</td><td>Prevents discarded-block maps from revealing which regions are unused or disrupting hidden-volume assumptions.</td></tr>
+    <tr><td>Performance maintenance with less continuous leakage</td><td>Prefer periodic manual <code>fstrim</code> over continuous <code>discard</code></td><td>Batches discard events instead of exposing allocation changes as they happen.</td></tr>
+  </table>
+<pre><code># Enable discard in /etc/crypttab when your threat model allows TRIM:
 cryptroot  UUID=&lt;uuid&gt;  none  luks,discard
 
 # Or when opening manually:
 cryptsetup open --allow-discards /dev/sdX2 cryptroot
 
-# To disable TRIM entirely (maximum deniability with hidden volumes):
-# Simply omit the 'discard' option — TRIM is off by default</code></pre>
+# Preferred maintenance option for less continuous leakage:
+fstrim -v /
+
+# To disable TRIM/discard for deniability or allocation-pattern concealment:
+# Omit the 'discard' option — TRIM is off by default</code></pre>
 
   <h3>Making Specific Files Truly Unrecoverable</h3>
 <pre><code># Option 1 (best): Never write to disk — use RAM-backed tmpfs for sensitive work
@@ -1506,11 +1587,11 @@ mat2 --inplace /path/to/directory/*.pdf</code></pre>
   <h3>Disabling Access Timestamps</h3>
   <p>Every time a file is read on a default ext4 filesystem, the kernel updates the file's <code>atime</code> (access time). Over time, these timestamps build a detailed record of your reading patterns — which files you accessed, in what order, and when. A forensic analyst examining a decrypted drive can reconstruct a day-by-day activity log purely from atime entries.</p>
 <pre><code># In /etc/fstab, add noatime and nodiratime to the root mount:
-/dev/mapper/cryptroot  /  ext4  defaults,noatime,nodiratime,data=writeback  0 1
+/dev/mapper/cryptroot  /  ext4  defaults,noatime,nodiratime  0 1
 
 # noatime: do not update file access times on read
 # nodiratime: do not update directory access times on read
-# data=writeback: only journal metadata, not file data (reduces journal forensic artifacts)
+# defaults: keep ext4's normal ordered journaling for crash recovery
 
 # Verify the mount options are active:
 mount | grep cryptroot
@@ -1568,21 +1649,28 @@ rm -f file_to_delete  # rather than moving to trash</code></pre>
   <p>The ext4 journal is a write-ahead log designed for crash recovery. Before committing filesystem changes, ext4 records them in the journal. This means recently deleted file contents may remain readable in the journal for some time after deletion, even after the filesystem marks the space as free.</p>
   <p>A forensic analyst who examines a decrypted ext4 volume with standard tools (<code>debugfs</code>, Autopsy, Sleuth Kit) can sometimes recover recently-written data directly from the journal without needing to carve unallocated space.</p>
 
-  <p><strong>Mitigation options:</strong></p>
-<pre><code># Option A: data=writeback mode (recommended balance of safety and anti-forensics)
+  <p><strong>Safer default:</strong> keep ext4's normal ordered journal mode and combine it with the access-time reduction from Chapter 13. This avoids creating extra access-history metadata while preserving the filesystem's normal crash-recovery behavior.</p>
+<pre><code># In /etc/fstab:
+/dev/mapper/cryptroot  /  ext4  defaults,noatime,nodiratime  0 1</code></pre>
+
+  <h3>Advanced / High-Risk: Reducing or Disabling ext4 Journaling</h3>
+  <p class="warn"><strong>Do not treat these options as defaults.</strong> <code>data=writeback</code> and journal removal reduce some journal artifacts, but they also weaken the filesystem behavior you rely on when something goes wrong.</p>
+  <p>In <code>data=writeback</code> mode, only filesystem metadata is journaled; file data is written directly. Disabling the journal removes even more crash-recovery protection. Both choices increase the chance of file corruption or stale data exposure after power loss, kernel panic, accidental unplugging, or a loose USB connection. That risk is especially important for a portable encrypted drive.</p>
+  <p>These settings can also conflict with this guide's emergency shutdown and destruction scenarios. A sudden power cut, forced shutdown, or rapid USB disconnect may be exactly when you most need the filesystem to remain consistent and bootable afterward. If the journal has been weakened or removed, the emergency action that protects you operationally can leave the volume harder to recover or verify.</p>
+  <p>Only consider these options after you have tested, restorable backups of the full encrypted volume and of any irreplaceable working files. Test the restore process before enabling the setting, not after the first failure.</p>
+<pre><code># High-risk option A: data=writeback mode
 # Only filesystem metadata is journaled; file data is written directly
 # Deleted file content is less likely to appear in the journal
 # In /etc/fstab:
 /dev/mapper/cryptroot  /  ext4  defaults,noatime,nodiratime,data=writeback  0 1
 
-# Option B: Disable the journal entirely (maximum anti-forensics; less crash safety)
-# Only do this while the filesystem is unmounted
+# High-risk option B: Disable the journal entirely
+# Only do this while the filesystem is unmounted and after tested backups exist
 tune2fs -O ^has_journal /dev/mapper/cryptroot
 # Re-enable if needed:
-tune2fs -O has_journal /dev/mapper/cryptroot
+tune2fs -O has_journal /dev/mapper/cryptroot</code></pre>
 
-# For a portable drive that you shut down properly, disabling the journal
-# is a reasonable trade-off — crash recovery is less critical when you control shutdowns</code></pre>
+  <p><strong>Safer alternatives:</strong> leave ext4 journaling at its normal default, then move the highest-risk working data into RAM-backed locations instead. Use <code>tmpfs</code> for sensitive working directories, browser/application caches, <code>/tmp</code>, and <code>/var/tmp</code>; use <code>Storage=volatile</code> for systemd-journald so logs live under <code>/run</code> and disappear on shutdown. These approaches reduce persistent artifacts without sacrificing as much filesystem crash safety.</p>
 
   <h3>Btrfs as an Alternative</h3>
   <p>Btrfs offers capabilities useful for anti-forensics that ext4 does not provide natively:</p>
@@ -1646,6 +1734,17 @@ usermod -aG proc username
     <li>No indication that the outer passphrase is anything other than the only passphrase</li>
   </ul>
   <p>Critically: <strong>there is no mathematical proof that a hidden volume exists</strong>. The space inside the outer volume that is not occupied by files is indistinguishable from random padding — which is a standard VeraCrypt feature. An examiner cannot prove the unallocated space contains a hidden volume without the inner passphrase. "I don't know what that random space is" is a cryptographically defensible statement.</p>
+
+  <p><strong>Scope of deniability:</strong> VeraCrypt hidden volumes provide deniability for the <em>existence of the hidden container itself</em>. They do not provide blanket deniability for every action performed on the Arch host. Once the Arch root filesystem is decrypted, ordinary host artifacts can still reveal circumstantial evidence: mount points, file-manager history, thumbnail caches, application recent-file lists, shell commands, backup manifests, indexer databases, or application caches may show that sensitive paths or filenames were accessed even if the hidden volume cannot be cryptographically proven.</p>
+
+  <h3>Operational Rules for Hidden Volumes</h3>
+  <ul>
+    <li><strong>Prefer amnesic or dedicated environments:</strong> Access hidden volumes from a live amnesic system or a dedicated compartment machine/VM when possible, rather than from your daily Arch installation.</li>
+    <li><strong>Prevent host services from touching hidden paths:</strong> Do not allow desktop file indexers, thumbnailers, recent-file lists, shell history, or backup tools to scan, record, or back up hidden-volume mount paths.</li>
+    <li><strong>Use non-persistent mount paths:</strong> Mount hidden volumes at temporary, non-bookmarked paths that are not reused in scripts, desktop shortcuts, file-manager sidebars, or persistent automount configuration.</li>
+    <li><strong>Disable or isolate application caches:</strong> Before opening sensitive files, disable caching where possible or run applications inside a separate profile, sandbox, VM, or disposable user account whose caches can be destroyed afterward.</li>
+    <li><strong>Assume the decrypted host can betray usage patterns:</strong> A decrypted Arch root may still contain circumstantial evidence of hidden-volume use even when VeraCrypt successfully denies the hidden container's existence.</li>
+  </ul>
 
   <h3>Method 1: VeraCrypt Hidden Volume</h3>
   <p>VeraCrypt is the most widely documented and peer-reviewed tool for plausible deniability. It was designed from the beginning to support this specific use case, unlike LUKS which added limited deniability features later.</p>
@@ -1770,7 +1869,12 @@ cryptsetup luksDump /dev/sdX2 | grep -c "luks2"</code></pre>
   </div>
 
   <h3>The Problem with a Standard LUKS Header</h3>
-  <p>By default, the LUKS2 header sits at the very beginning of the encrypted partition. This 16 MB structure contains everything needed to identify the drive as LUKS-encrypted and to begin a passphrase attack: the magic signature, cipher parameters, PBKDF configuration, and the anti-forensic split (encrypted master key). Any forensic tool will immediately detect it.</p>
+  <p>By default, the LUKS2 header sits at the very beginning of the encrypted partition. The exact metadata and keyslot layout depends on the LUKS version, cryptsetup version, and formatting options. Inspect the volume you actually created instead of relying on a fixed-size claim: the header contains the magic signature, cipher parameters, PBKDF configuration, JSON metadata, keyslot areas, and encrypted key material needed to begin an offline passphrase attack. Any forensic tool will immediately detect an attached header.</p>
+<pre><code># Inspect an attached-header LUKS volume
+cryptsetup luksDump /dev/sdX2
+
+# Inspect a volume that uses a detached header file
+cryptsetup luksDump --header /path/to/luks-header.img /dev/sdX2</code></pre>
 
   <h3>What a Detached Header Achieves</h3>
   <p>When the LUKS header is stored separately from the encrypted data, the encrypted partition contains <em>only</em> AES-XTS ciphertext — completely indistinguishable from random noise. Without the header file:</p>
@@ -1782,9 +1886,11 @@ cryptsetup luksDump /dev/sdX2 | grep -c "luks2"</code></pre>
   </ul>
 
   <h3>Creating a LUKS Volume with a Detached Header</h3>
+  <p>Create detached-header files conservatively. Use 32 MiB or larger unless the cryptsetup documentation for your exact version and selected options confirms that a smaller file is enough. After formatting, verify the metadata and keyslot layout with <code>cryptsetup luksDump --header</code> and test backup, restore, and unlock on disposable media before relying on the procedure for real data.</p>
 <pre><code># The header will live on a separate device — NOT on the encrypted drive
-# First create the header file (16 MiB is sufficient for LUKS2 + multiple key slots)
-truncate -s 16M /tmp/luks-header.img
+# Create a conservative detached-header file; use a larger size if your
+# cryptsetup version, options, or future keyslot plans require it.
+truncate -s 32M /tmp/luks-header.img
 
 # Format the encrypted partition — the header goes into the separate file
 cryptsetup luksFormat \
@@ -1797,12 +1903,29 @@ cryptsetup luksFormat \
   --pbkdf-memory 4194304 \
   --pbkdf-parallel 4 \
   --pbkdf-force-iterations 6 \
-  --iter-time 10000 \
   /dev/sdX2
   # /dev/sdX2 itself receives NOTHING — no header, no signature
 
+# Inspect the detached-header metadata/keyslot layout that was created
+cryptsetup luksDump --header /tmp/luks-header.img /dev/sdX2
+
 # Open the encrypted partition using the detached header
 cryptsetup open /dev/sdX2 cryptroot --header /tmp/luks-header.img</code></pre>
+
+  <h3>Practice Backup, Restore, and Unlock Before Trusting It</h3>
+  <p>Do this drill on a spare USB stick, loop device, or other disposable target first. The goal is to prove that your header size, backup workflow, restoration workflow, and unlock command work with your installed cryptsetup version before you entrust irreplaceable data to them.</p>
+<pre><code># Example disposable-media drill — replace /dev/sdY2 only with a throwaway target
+truncate -s 32M /tmp/test-luks-header.img
+cryptsetup luksFormat --type luks2 --header /tmp/test-luks-header.img /dev/sdY2
+cryptsetup luksDump --header /tmp/test-luks-header.img /dev/sdY2
+cp /tmp/test-luks-header.img /tmp/test-luks-header.backup.img
+cryptsetup open --header /tmp/test-luks-header.backup.img /dev/sdY2 testcrypt
+cryptsetup close testcrypt
+
+# Simulate restoring the detached header file from backup, then unlock again
+cp /tmp/test-luks-header.backup.img /tmp/test-luks-header.restored.img
+cryptsetup open --header /tmp/test-luks-header.restored.img /dev/sdY2 testcrypt
+cryptsetup close testcrypt</code></pre>
 
   <h3>Storing the Detached Header Securely</h3>
   <p>The header file must be stored completely separately from the encrypted drive. The security model is two-factor physical: you need both the drive and the header to even attempt decryption.</p>
@@ -1971,74 +2094,86 @@ lspci | diff ~/baseline_pci.txt -
     <h2>TPM2 and Measured Boot</h2>
   </div>
 
+  <p class="warn"><strong>Profile requirement:</strong> these TPM2 instructions assume you selected <a href="#ch9">Chapter 9's UKI + Secure Boot + systemd initramfs profile</a>. They are not a drop-in addition to the GRUB + mkinitcpio <code>encrypt</code> hook profile, because systemd TPM2 unlocking relies on <code>systemd-cryptenroll</code>, <code>sd-encrypt</code>, and <code>/etc/crypttab.initramfs</code> rather than GRUB's <code>cryptdevice=</code> command-line flow.</p>
+
   <h3>What a TPM2 Chip Does</h3>
   <p>A Trusted Platform Module (TPM2) is a dedicated security microcontroller present on most modern laptop and desktop motherboards. It provides three functions relevant to your threat model:</p>
   <ol>
-    <li><strong>Measured boot:</strong> As the machine starts, each boot component (UEFI firmware → bootloader → kernel → initramfs) is measured — SHA-256 hashed — and the hash is recorded in a set of registers called Platform Configuration Registers (PCRs). These measurements are created by hardware, not software, and cannot be forged by any software running after the measurement is taken.</li>
-    <li><strong>Key sealing:</strong> The TPM can store a secret (such as the LUKS master key or a key that unlocks a key slot) and bind its release to specific PCR values. If the boot chain has been tampered with, the PCR values will differ from when the key was sealed, and the TPM will refuse to release it.</li>
-    <li><strong>Physical tamper resistance:</strong> The TPM chip is designed to resist physical extraction of secrets. Keys stored inside cannot be retrieved by probing the chip — the chip self-destructs or becomes permanently locked after a number of failed attempts.</li>
+    <li><strong>Measured boot:</strong> As the machine starts, each boot component is measured — SHA-256 hashed — and the hash is recorded in Platform Configuration Registers (PCRs). These measurements are created by hardware, not by later userspace software.</li>
+    <li><strong>Key sealing:</strong> The TPM can release a LUKS unlock secret only when selected PCR values match the values recorded at enrollment. If firmware, Secure Boot state, or signed boot artifacts change unexpectedly, release fails.</li>
+    <li><strong>Physical tamper resistance:</strong> TPM-resident keys are designed not to be extractable by probing the chip, and the TPM can rate-limit or lock out repeated failed attempts.</li>
   </ol>
 
-  <h3>How PCRs Detect Evil Maid Attacks</h3>
+  <h3>How PCRs Fit the UKI Profile</h3>
   <table>
     <tr><th>PCR</th><th>What It Measures</th><th>What Changes It</th></tr>
     <tr><td>PCR0</td><td>UEFI firmware</td><td>Firmware update or replacement</td></tr>
-    <tr><td>PCR1</td><td>UEFI firmware configuration</td><td>BIOS settings change</td></tr>
-    <tr><td>PCR7</td><td>Secure Boot state and keys</td><td>Secure Boot enabled/disabled, key changes</td></tr>
-    <tr><td>PCR4</td><td>Boot manager (GRUB EFI binary)</td><td>GRUB binary replacement — evil maid attack</td></tr>
-    <tr><td>PCR8</td><td>Boot manager configuration</td><td>grub.cfg modification</td></tr>
-    <tr><td>PCR9</td><td>Boot entries, kernel, initramfs</td><td>Kernel or initramfs modification</td></tr>
+    <tr><td>PCR1</td><td>UEFI firmware configuration</td><td>UEFI settings changes</td></tr>
+    <tr><td>PCR7</td><td>Secure Boot state and enrolled keys</td><td>Secure Boot disabled, setup mode entered, or keys changed</td></tr>
+    <tr><td>PCR11</td><td>systemd-stub UKI measurements</td><td>Signed UKI, embedded initramfs, or embedded command line changes</td></tr>
   </table>
 
-  <p>If an evil maid replaces your GRUB binary with a keylogging version: PCR4 changes. The TPM-sealed LUKS key cannot be released. The system falls back to requesting the manual passphrase — and you know immediately that something is wrong, because the system normally auto-unlocks.</p>
+  <p>With the recommended direct-boot UKI path, GRUB is removed or bypassed for normal boot. The important integrity boundary is the signed UKI and the Secure Boot key set that authorizes it. If someone replaces the UKI or changes its embedded command line without your signing key, firmware Secure Boot should refuse to execute it. If firmware settings or measured boot state change in a way covered by your PCR policy, TPM2 auto-unlock fails and the machine falls back to the manual LUKS passphrase.</p>
 
-  <h3>Setting Up TPM2 Auto-Unlock with clevis</h3>
-<pre><code>pacman -S tpm2-tools tpm2-tss clevis
+  <h3>Set Up TPM2 Auto-Unlock with systemd-cryptenroll</h3>
+<pre><code>pacman -S tpm2-tools tpm2-tss systemd
 
 # Verify the TPM2 chip is present and responsive
 ls /dev/tpm*
 # Should show: /dev/tpm0 and /dev/tpmrm0
 
-# Bind a LUKS key slot to TPM2 PCRs
-# PCRs 0,1,7: firmware, config, and Secure Boot (minimum)
-# PCRs 0,1,4,7,8,9: also includes bootloader and kernel (maximum detection)
-clevis luks bind -d /dev/sdX2 tpm2 '{"pcr_ids":"0,1,7,8,9"}'
-# You will be prompted for your LUKS passphrase to authorize adding the new slot
+systemd-analyze has-tpm2
+# Should report TPM2 support, not "no"
 
-# Enable the clevis systemd integration for boot-time TPM unlocking
-systemctl enable clevis-luks-askpass.path
+# Enroll a TPM2-backed LUKS token for the UKI/systemd profile.
+# Start with PCR 7 for Secure Boot state; add PCRs only after testing update behavior.
+systemd-cryptenroll \
+  --tpm2-device=auto \
+  --tpm2-pcrs=7 \
+  /dev/sdX2
+# You will be prompted for your existing LUKS passphrase.
 
-# Rebuild initramfs to include TPM2 support
-mkinitcpio -P</code></pre>
+# Configure systemd-cryptsetup in the initramfs to use the enrolled TPM2 token.
+cat > /etc/crypttab.initramfs &lt;&lt; 'EOF'
+cryptroot UUID=&lt;UUID&gt; - luks,tpm2-device=auto
+EOF
+
+# Rebuild the systemd initramfs and then rebuild/sign the UKI as shown in Chapter 9.
+mkinitcpio -P
+ukify build \
+  --linux=/boot/vmlinuz-linux-hardened \
+  --initrd=/boot/initramfs-linux-hardened.img \
+  --cmdline=@/etc/kernel/cmdline \
+  --secureboot-private-key=/usr/share/secureboot/keys/db/db.key \
+  --secureboot-certificate=/usr/share/secureboot/keys/db/db.pem \
+  --output=/boot/EFI/Linux/arch-hardened.efi
+sbctl sign -s /boot/EFI/Linux/arch-hardened.efi
+sbctl verify</code></pre>
 
   <p><strong>Boot behavior with TPM2 active:</strong></p>
   <ul>
-    <li><strong>Normal boot (no tampering):</strong> PCR values match those recorded during sealing → TPM releases the key → LUKS unlocks automatically → no passphrase required</li>
-    <li><strong>Tampered boot (evil maid attack):</strong> PCR4 (or another PCR) differs → TPM refuses to release the key → system asks for manual passphrase → you know the machine was tampered with</li>
+    <li><strong>Normal boot:</strong> firmware verifies your signed UKI, PCR policy matches, TPM2 releases the enrolled secret, and <code>systemd-cryptsetup</code> unlocks <code>cryptroot</code> without a passphrase.</li>
+    <li><strong>Tampered or policy-changing boot:</strong> Secure Boot blocks unsigned UKI changes, or TPM2 refuses release when selected PCRs no longer match. The system asks for the manual passphrase; treat an unexpected prompt as a tamper signal until investigated.</li>
   </ul>
 
-  <h3>Re-sealing After System Updates</h3>
-<pre><code># After any update that modifies the kernel, initramfs, GRUB, or grub.cfg:
-clevis luks regen -d /dev/sdX2 -s 1
-# -s 1: the key slot number clevis used (check with cryptsetup luksDump)
+  <h3>PCR Selection and Updates</h3>
+  <p>Use a conservative PCR policy first. PCR7 binds unlocking to Secure Boot state and keys, which is stable across normal kernel updates. PCR11 can bind unlocking more tightly to the UKI measured by systemd-stub, but it changes whenever you rebuild the UKI; choose it only if you are prepared to recover with the passphrase and re-enroll after legitimate UKI updates.</p>
 
-# Automate this with a pacman hook:
-cat > /etc/pacman.d/hooks/zz-clevis-regen.hook &lt;&lt; 'EOF'
-[Trigger]
-Operation = Install
-Operation = Upgrade
-Type = Path
-Target = usr/lib/modules/*/vmlinuz
-Target = boot/*.efi
-Target = boot/grub/grub.cfg
+<pre><code># Inspect existing enrollments and token slots
+systemd-cryptenroll /dev/sdX2
+cryptsetup luksDump /dev/sdX2
 
-[Action]
-Description = Re-sealing TPM2 PCR binding after boot component update
-When = PostTransaction
-Exec = /usr/bin/clevis luks regen -d /dev/sdX2 -s 1
-EOF</code></pre>
+# If you intentionally change Secure Boot keys or tighten PCR policy,
+# remove the old TPM2 enrollment and enroll a new one while booted trusted.
+systemd-cryptenroll --wipe-slot=tpm2 /dev/sdX2
+systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 /dev/sdX2
 
-  <p class="warn">If you update the kernel or bootloader without re-sealing, the next boot will fail TPM attestation and request the manual passphrase. This is safe — you simply enter your passphrase manually — but you must then re-seal before the next reboot to restore automatic unlocking.</p>
+# Then rebuild and re-sign the UKI per the Chapter 9 UKI profile.
+mkinitcpio -P
+ukify build --linux=/boot/vmlinuz-linux-hardened --initrd=/boot/initramfs-linux-hardened.img --cmdline=@/etc/kernel/cmdline --secureboot-private-key=/usr/share/secureboot/keys/db/db.key --secureboot-certificate=/usr/share/secureboot/keys/db/db.pem --output=/boot/EFI/Linux/arch-hardened.efi
+sbctl sign -s /boot/EFI/Linux/arch-hardened.efi</code></pre>
+
+  <p class="warn">Always keep a strong passphrase slot. TPM2 auto-unlock is a convenience and tamper signal, not a replacement for recovery credentials. If an update, firmware change, or PCR policy change prevents TPM2 release, boot with the passphrase, verify what changed, and re-enroll only after you trust the new boot state.</p>
 </section>
 
 <!-- ═══════════════════════════════════════════════════════════
@@ -2057,7 +2192,7 @@ EOF</code></pre>
   </div>
 
   <div class="key-point">
-    Critical insight: you do not need to destroy the entire SSD. You only need to destroy the LUKS header — a 16 MB structure at the start of the partition. Without the header, the remaining ciphertext is permanently and mathematically unrecoverable regardless of computational power applied. The key slots and master key material exist only in those 16 MB. Destroying them makes the rest of the drive — however many gigabytes — permanently inaccessible.
+    Critical insight: you do not need to destroy the entire SSD, but you must destroy the active LUKS header material for the configuration you actually use. For an attached-header volume, that means the LUKS metadata and keyslot areas at the start of the encrypted partition; verify their layout with <code>cryptsetup luksDump /dev/sdX2</code> instead of assuming a universal fixed size. For a detached-header volume, destroying the partition start is not enough — the separate header file or device must also be destroyed. Without the correct header and keyslot material, the remaining ciphertext is permanently and mathematically unrecoverable regardless of computational power applied.
   </div>
 
   <h3>Method 1: Software Destruction (Fastest — Seconds)</h3>
@@ -2066,12 +2201,25 @@ EOF</code></pre>
 # Overwrites all key slots with random data — takes 1-2 seconds
 cryptsetup erase /dev/sdX2
 
+# Option B: dd random data over the attached-header region
+# First verify the metadata/keyslot layout for this exact volume/version:
+cryptsetup luksDump /dev/sdX2
+# Then overwrite a conservative region at the start of the LUKS partition.
+# Adjust the count upward if luksDump/docs for your cryptsetup version require it.
+dd if=/dev/urandom of=/dev/sdX2 bs=4K count=8192 conv=fsync
+
+# Detached-header volumes are different: destroy every copy of the header file/device.
+# Inspect the detached header before planning destruction:
+cryptsetup luksDump --header /path/to/luks-header.img /dev/sdX2
+shred -u /path/to/luks-header.img
 # Option B: dd random data over the header region
 # Overwrites the first 32 MiB (covers the LUKS header + margin) — takes 5-10 seconds
-dd if=/dev/urandom of=/dev/sdX bs=4K count=8192 conv=fsync
+dd if=/dev/urandom of=/dev/sdX2 bs=4K count=8192 conv=fsync
 
 # Option C: erase and immediately power off — most complete
 cryptsetup erase /dev/sdX2 && sync && poweroff -f</code></pre>
+
+  <p class="note"><strong>Detached-header setups:</strong> destroy the detached header file/device and all header backups. Overwriting <code>/dev/sdX2</code> is not sufficient if copies of the detached header still exist, because those copies still contain the metadata and key material needed to attack or unlock the ciphertext.</p>
 
   <p>Create a ready-to-execute script and keyboard shortcut now, before you need it:</p>
 <pre><code">cat > /usr/local/bin/emergency-destroy.sh &lt;&lt; 'EOF'
@@ -2080,7 +2228,9 @@ echo "EMERGENCY DESTROY — 3 seconds to abort with Ctrl+C"
 sleep 3
 logger -t emergency "DESTRUCTION INITIATED"
 cryptsetup erase /dev/sdX2 2>/dev/null || true
-dd if=/dev/urandom of=/dev/sdX bs=4K count=8192 conv=fsync 2>/dev/null || true
+dd if=/dev/urandom of=/dev/sdX2 bs=4K count=8192 conv=fsync 2>/dev/null || true
+# If using a detached header, destroy its separate storage too:
+# shred -u /path/to/luks-header.img 2>/dev/null || true
 sync
 poweroff -f
 EOF
@@ -2116,7 +2266,9 @@ cat > /usr/local/bin/trigger-nuke.sh &lt;&lt; 'EOF'
 #!/bin/bash
 logger -t emergency "NUKE TRIGGERED at $(date)"
 cryptsetup erase /dev/sdX2 2>/dev/null || true
-dd if=/dev/urandom of=/dev/sdX bs=4K count=8192 conv=fsync 2>/dev/null || true
+dd if=/dev/urandom of=/dev/sdX2 bs=4K count=8192 conv=fsync 2>/dev/null || true
+# If using a detached header, destroy its separate storage too:
+# shred -u /path/to/luks-header.img 2>/dev/null || true
 sync
 poweroff -f
 EOF
@@ -2657,18 +2809,18 @@ gpg --armor --sign --encrypt --recipient recipient@email.com message.txt</code><
     <li>Diceware passphrase: 6+ words, generated with physical dice, memorized</li>
     <li>LUKS header: standard or detached (stored separately from drive)</li>
     <li><code>linux-hardened</code> kernel installed</li>
-    <li><code>encrypt</code> hook present in <code>/etc/mkinitcpio.conf</code>, in correct position</li>
-    <li>initramfs rebuilt after any hook or kernel change</li>
+    <li>Selected one Chapter 9 boot profile and kept hooks/cmdline consistent: GRUB uses <code>encrypt</code> + <code>cryptdevice=</code>; UKI uses <code>systemd</code>/<code>sd-encrypt</code> + <code>/etc/crypttab.initramfs</code></li>
+    <li>initramfs and, if using UKI, signed UKI rebuilt after any hook or kernel change</li>
   </ul>
 
   <h3>Boot Security</h3>
   <ul class="checklist">
     <li>UEFI administrator password set</li>
     <li>Boot order locked: only your SATA-to-USB drive, all other paths disabled</li>
-    <li>Secure Boot enabled with your custom keys (sbctl)</li>
-    <li>GRUB password set with PBKDF2 hash</li>
-    <li>TPM2 measured boot configured (clevis) if TPM2 chip is present</li>
-    <li>pacman hook re-signs EFI binaries and re-seals TPM after updates</li>
+    <li>Secure Boot enabled with your custom keys (sbctl) for the UKI profile, or GRUB integrity mitigations documented for the GRUB profile</li>
+    <li>GRUB password set with PBKDF2 hash if GRUB remains in the boot path</li>
+    <li>TPM2 measured boot configured with <code>systemd-cryptenroll</code> only when using the UKI + systemd profile</li>
+    <li>Update process rebuilds initramfs/UKI, re-signs EFI binaries, and re-enrolls TPM2 only after trusted boot-state changes</li>
   </ul>
 
   <h3>System Hardening</h3>
@@ -2688,7 +2840,7 @@ gpg --armor --sign --encrypt --recipient recipient@email.com message.txt</code><
     <li><code>~/.cache</code>, <code>/tmp</code>, <code>/var/tmp</code> on tmpfs</li>
     <li><code>noatime,nodiratime</code> on all persistent mounts</li>
     <li>mat2 and exiftool installed; metadata scrubbed from all files before sharing</li>
-    <li>ext4 journal configured to <code>data=writeback</code> or disabled</li>
+    <li>ext4 journal left at the safer default unless you have a tested-backup reason to accept <code>data=writeback</code> or journal removal risk</li>
   </ul>
 
   <h3>Drive Seizure Resistance</h3>
