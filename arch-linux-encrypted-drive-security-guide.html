@@ -1615,6 +1615,17 @@ usermod -aG proc username
   </ul>
   <p>Critically: <strong>there is no mathematical proof that a hidden volume exists</strong>. The space inside the outer volume that is not occupied by files is indistinguishable from random padding — which is a standard VeraCrypt feature. An examiner cannot prove the unallocated space contains a hidden volume without the inner passphrase. "I don't know what that random space is" is a cryptographically defensible statement.</p>
 
+  <p><strong>Scope of deniability:</strong> VeraCrypt hidden volumes provide deniability for the <em>existence of the hidden container itself</em>. They do not provide blanket deniability for every action performed on the Arch host. Once the Arch root filesystem is decrypted, ordinary host artifacts can still reveal circumstantial evidence: mount points, file-manager history, thumbnail caches, application recent-file lists, shell commands, backup manifests, indexer databases, or application caches may show that sensitive paths or filenames were accessed even if the hidden volume cannot be cryptographically proven.</p>
+
+  <h3>Operational Rules for Hidden Volumes</h3>
+  <ul>
+    <li><strong>Prefer amnesic or dedicated environments:</strong> Access hidden volumes from a live amnesic system or a dedicated compartment machine/VM when possible, rather than from your daily Arch installation.</li>
+    <li><strong>Prevent host services from touching hidden paths:</strong> Do not allow desktop file indexers, thumbnailers, recent-file lists, shell history, or backup tools to scan, record, or back up hidden-volume mount paths.</li>
+    <li><strong>Use non-persistent mount paths:</strong> Mount hidden volumes at temporary, non-bookmarked paths that are not reused in scripts, desktop shortcuts, file-manager sidebars, or persistent automount configuration.</li>
+    <li><strong>Disable or isolate application caches:</strong> Before opening sensitive files, disable caching where possible or run applications inside a separate profile, sandbox, VM, or disposable user account whose caches can be destroyed afterward.</li>
+    <li><strong>Assume the decrypted host can betray usage patterns:</strong> A decrypted Arch root may still contain circumstantial evidence of hidden-volume use even when VeraCrypt successfully denies the hidden container's existence.</li>
+  </ul>
+
   <h3>Method 1: VeraCrypt Hidden Volume</h3>
   <p>VeraCrypt is the most widely documented and peer-reviewed tool for plausible deniability. It was designed from the beginning to support this specific use case, unlike LUKS which added limited deniability features later.</p>
 
