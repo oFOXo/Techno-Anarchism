@@ -965,7 +965,7 @@ EDITOR=vim visudo
 # Uncomment: %wheel ALL=(ALL:ALL) ALL</code></pre>
 
   <h3>Configure the initramfs for Encryption</h3>
-  <p>The initramfs is the minimal Linux environment that runs before the real root filesystem is mounted. It must contain the LUKS unlocking logic — the <code>encrypt</code> hook — or the system will not know how to decrypt the drive at boot.</p>
+  <p>The initramfs is the minimal Linux environment that runs before the real root filesystem is mounted. The example below prepares the GRUB + mkinitcpio <code>encrypt</code> hook profile. If you choose the UKI + Secure Boot + systemd initramfs profile in Chapter 9, replace this with that profile's <code>systemd</code>/<code>sd-encrypt</code> hook set and <code>/etc/crypttab.initramfs</code> flow.</p>
 <pre><code>vim /etc/mkinitcpio.conf
 
 # Find the HOOKS line and set it to exactly:
@@ -987,21 +987,38 @@ mkinitcpio -P
     <h2>Bootloader Hardening</h2>
   </div>
 
-  <h3>Install GRUB</h3>
+  <p>This guide supports two boot profiles. Choose one and keep its initramfs hooks, kernel command line, and unlock tooling consistent. Do not mix the GRUB <code>encrypt</code> hook profile with systemd TPM2/FIDO2 enrollment and expect it to work as a drop-in change; TPM2 auto-unlock is covered later in <a href="#ch19">Chapter 19</a> for the UKI + systemd profile.</p>
+
+  <h3>Supported Boot Profile 1: GRUB + mkinitcpio encrypt hook</h3>
+  <p>This profile is the classic Arch encrypted-root flow. GRUB loads the kernel and initramfs, then the mkinitcpio <code>encrypt</code> hook reads <code>cryptdevice=</code> from the kernel command line and prompts for the LUKS passphrase.</p>
+
+  <h4>Initramfs hooks</h4>
+<pre><code>vim /etc/mkinitcpio.conf
+
+# Use the busybox-based encrypt hook profile:
+HOOKS=(base udev autodetect keyboard keymap consolefont modconf block encrypt filesystems fsck)
+
+# Ordering matters:
+# - keyboard/keymap before encrypt: passphrase entry works early in boot
+# - block before encrypt: storage devices exist before LUKS is opened
+# - encrypt before filesystems: root is decrypted before it is mounted
+
+mkinitcpio -P</code></pre>
+
+  <h4>Install and configure GRUB</h4>
 <pre><code>grub-install \
   --target=x86_64-efi \
   --efi-directory=/boot \
   --bootloader-id=GRUB \
-  --recheck</code></pre>
+  --recheck
 
-  <h3>Configure GRUB for Encrypted Boot</h3>
-<pre><code># Get the UUID of your encrypted partition
+# Get the UUID of your encrypted partition
 blkid /dev/sdX2
-# Copy the UUID value (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+# Copy the UUID value, not the filesystem UUID inside the opened mapper device
 
 vim /etc/default/grub</code></pre>
 
-  <p>Set <code>GRUB_CMDLINE_LINUX</code> to the following (replace <code>&lt;UUID&gt;</code> with your actual UUID):</p>
+  <p>Set <code>GRUB_CMDLINE_LINUX</code> to include the mkinitcpio <code>encrypt</code> hook parameters. Replace <code>&lt;UUID&gt;</code> with the UUID of the LUKS partition:</p>
 <pre><code>GRUB_CMDLINE_LINUX="cryptdevice=UUID=&lt;UUID&gt;:cryptroot root=/dev/mapper/cryptroot \
   init_on_alloc=1 \
   init_on_free=1 \
@@ -1014,27 +1031,13 @@ vim /etc/default/grub</code></pre>
   iommu=force \
   intel_iommu=on \
   nohibernate \
-  mitigations=auto"</code></pre>
+  mitigations=auto"
 
-  <table>
-    <tr><th>Parameter</th><th>What It Prevents</th></tr>
-    <tr><td><code>init_on_alloc=1</code></td><td>Zeroes memory before allocating it. Prevents "heap spray" attacks that read old memory contents from newly allocated buffers.</td></tr>
-    <tr><td><code>init_on_free=1</code></td><td>Zeroes memory after freeing it. Prevents use-after-free vulnerabilities from leaking data.</td></tr>
-    <tr><td><code>vsyscall=none</code></td><td>Disables the legacy vsyscall interface at a fixed kernel address. This address is a common known-location exploit trampoline — attackers jump here during code reuse attacks.</td></tr>
-    <tr><td><code>debugfs=off</code></td><td>Disables the debugfs virtual filesystem. Without this, debugfs exposes internal kernel data structures that an attacker with any code execution can use to escalate privileges or read kernel memory.</td></tr>
-    <tr><td><code>lockdown=confidentiality</code></td><td>Activates kernel lockdown mode at the most restrictive level. Prevents userspace from reading or writing kernel memory via /dev/mem, kexec, hibernation, or other privileged interfaces. Even root cannot extract kernel secrets.</td></tr>
-    <tr><td><code>module.sig_enforce=1</code></td><td>Rejects any kernel module not signed with the kernel's build-time signing key. Prevents an attacker with root access from loading a malicious kernel module.</td></tr>
-    <tr><td><code>iommu=force</code></td><td>Forces strict IOMMU enforcement. Without IOMMU, any PCIe device (or a device pretending to be one via Thunderbolt DMA) can read and write all physical RAM, including the LUKS decryption key.</td></tr>
-    <tr><td><code>nohibernate</code></td><td>Disables hibernation. A hibernate image on disk contains an exact snapshot of RAM — including the LUKS decryption key — written to disk unencrypted. This would completely defeat drive encryption.</td></tr>
-    <tr><td><code>mitigations=auto</code></td><td>Enables all hardware vulnerability mitigations (Spectre, Meltdown, MDS, etc.) appropriate for the detected CPU. These prevent speculative execution attacks that could leak the LUKS key from kernel memory.</td></tr>
-  </table>
+grub-mkconfig -o /boot/grub/grub.cfg</code></pre>
 
-<pre><code>grub-mkconfig -o /boot/grub/grub.cfg</code></pre>
-
-  <h3>GRUB Password Protection</h3>
-  <p>Without a GRUB password, anyone who reaches the GRUB menu can press <code>e</code> to edit the boot entry, add <code>init=/bin/bash</code> to the kernel command line, and boot directly to a root shell. The LUKS encryption would still protect the data on disk, but the attacker could modify the bootloader for a future evil maid attack (Chapter 18) without leaving obvious traces.</p>
-<pre><code># Generate a PBKDF2-hashed GRUB password
-grub-mkpasswd-pbkdf2
+  <h4>GRUB password protection</h4>
+  <p>Without a GRUB password, anyone who reaches the GRUB menu can press <code>e</code>, edit the boot entry, add dangerous kernel parameters, or prepare a future evil maid attack. A password raises the bar for interactive menu tampering, but it does not by itself authenticate the files GRUB reads from the EFI partition.</p>
+<pre><code>grub-mkpasswd-pbkdf2
 # Enter and confirm your GRUB menu password
 # Copy the output hash (starts with: grub.pbkdf2.sha512.10000...)
 
@@ -1045,75 +1048,86 @@ EOF
 
 grub-mkconfig -o /boot/grub/grub.cfg</code></pre>
 
-  <h3>Unified Kernel Images</h3>
-  <p>A standard GRUB configuration has a meaningful security gap: <code>grub.cfg</code> is an unsigned, unencrypted text file on the EFI partition. An attacker with a few minutes of physical access can edit it — changing kernel parameters, adding <code>init=/bin/bash</code>, or pointing GRUB at a different kernel — without triggering Secure Boot, because GRUB itself is signed but the config file it reads is not.</p>
-  <p>A Unified Kernel Image (UKI) solves this by embedding the kernel command line, the initramfs, and the kernel itself into a single EFI binary. The entire binary is Secure Boot signed. Any modification — including changing a single character of the kernel command line — invalidates the signature and causes the UEFI firmware to refuse to boot it.</p>
-<pre><code>pacman -S ukify
+  <p class="warn"><strong>Remaining risk:</strong> in a standard GRUB installation, <code>/boot/grub/grub.cfg</code> is an unsigned text file. Secure Boot may verify the GRUB EFI binary, but an attacker who can modify <code>grub.cfg</code> can still alter boot entries unless GRUB is configured to verify a signed configuration, the configuration is protected by another integrity mechanism, or you choose the signed UKI profile below.</p>
 
-# Write the kernel command line to a file for embedding
+  <h3>Supported Boot Profile 2: UKI + Secure Boot + systemd initramfs</h3>
+  <p>This profile uses a signed Unified Kernel Image (UKI) containing the kernel, initramfs, and kernel command line. The firmware verifies the UKI signature before execution, so changing the embedded command line, kernel, or initramfs invalidates the signature. Use this profile when you want the TPM2 or FIDO2 unlock flows described in <a href="#ch19">Chapter 19</a>.</p>
+
+  <h4>Boot path: remove or bypass GRUB</h4>
+  <p>The recommended UKI path is to boot the signed UKI directly from UEFI and remove GRUB from the normal boot path. You may leave GRUB installed only as a disabled recovery entry, but do not use unsigned GRUB menu entries as the primary path. If a firmware cannot boot the UKI directly, GRUB should only chainload the already signed UKI and must not provide an editable unsigned kernel command line.</p>
+
+  <h4>systemd initramfs hooks and crypttab flow</h4>
+<pre><code>vim /etc/mkinitcpio.conf
+
+# Use the systemd-based initramfs profile for TPM2/FIDO2 unlocking:
+HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt filesystems fsck)
+
+mkinitcpio -P
+
+# Identify the LUKS partition UUID
+blkid /dev/sdX2
+
+# Configure systemd-cryptsetup in the initramfs.
+# For passphrase-only boot, omit the fido2/tpm2 options.
+cat > /etc/crypttab.initramfs &lt;&lt; 'EOF'
+cryptroot UUID=&lt;UUID&gt; - luks
+EOF</code></pre>
+
+  <p>When FIDO2 or TPM2 unlock is recommended, enroll with <code>systemd-cryptenroll</code> and express the unlock method in <code>/etc/crypttab.initramfs</code>, not with the GRUB-only <code>cryptdevice=</code> syntax:</p>
+<pre><code># FIDO2 example; see Chapter 17 for token enrollment details
+systemd-cryptenroll --fido2-device=auto --fido2-with-client-pin=yes /dev/sdX2
+printf 'cryptroot UUID=&lt;UUID&gt; - luks,fido2-device=auto\n' > /etc/crypttab.initramfs
+
+# TPM2 example; Chapter 19 gives the full TPM2 procedure and PCR selection
+systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+1+7 /dev/sdX2
+printf 'cryptroot UUID=&lt;UUID&gt; - luks,tpm2-device=auto\n' > /etc/crypttab.initramfs
+
+mkinitcpio -P</code></pre>
+
+  <h4>Build and sign the UKI</h4>
+<pre><code>pacman -S ukify sbctl
+
 cat > /etc/kernel/cmdline &lt;&lt; 'EOF'
-cryptdevice=UUID=&lt;UUID&gt;:cryptroot root=/dev/mapper/cryptroot init_on_alloc=1 init_on_free=1 vsyscall=none debugfs=off lockdown=confidentiality module.sig_enforce=1 iommu=force intel_iommu=on nohibernate mitigations=auto
+root=/dev/mapper/cryptroot init_on_alloc=1 init_on_free=1 page_alloc.shuffle=1 randomize_kstack_offset=on vsyscall=none debugfs=off lockdown=confidentiality module.sig_enforce=1 iommu=force intel_iommu=on nohibernate mitigations=auto
 EOF
 
-# Build and sign the UKI (requires Secure Boot keys from the next step)
+# Generate and enroll custom Secure Boot keys if you have not already done so
+sbctl status
+sbctl create-keys
+sbctl enroll-keys --microsoft
+
 ukify build \
   --linux=/boot/vmlinuz-linux-hardened \
   --initrd=/boot/initramfs-linux-hardened.img \
   --cmdline=@/etc/kernel/cmdline \
-  --secureboot-private-key=/path/to/db.key \
-  --secureboot-certificate=/path/to/db.crt \
-  --output=/boot/EFI/Linux/arch-hardened.efi</code></pre>
+  --secureboot-private-key=/usr/share/secureboot/keys/db/db.key \
+  --secureboot-certificate=/usr/share/secureboot/keys/db/db.pem \
+  --output=/boot/EFI/Linux/arch-hardened.efi
 
-  <h3>Secure Boot with Custom Keys</h3>
-  <p>Default Secure Boot uses Microsoft's signing keys. This means Microsoft can sign software that boots on your machine — and by extension, so can anyone who compromises Microsoft's infrastructure or obtains a code-signing certificate under their CA hierarchy. For your threat model, you want Secure Boot controlled entirely by you: only software you signed can boot.</p>
-<pre><code>pacman -S sbctl
-
-# Check the current Secure Boot enrollment state
-sbctl status
-
-# In UEFI firmware: Security → Secure Boot → Clear Keys / Enter Setup Mode
-# (exact menu path varies by manufacturer)
-
-# Generate your custom Platform Key (PK), Key Exchange Key (KEK), and Database key (db)
-sbctl create-keys
-
-# Enroll your keys; --microsoft preserves Microsoft's keys for hardware compatibility
-# (some drivers and option ROMs require Microsoft's key)
-sbctl enroll-keys --microsoft
-
-# Sign all boot-relevant EFI binaries and record their paths
-sbctl sign -s /boot/EFI/GRUB/grubx64.efi
-sbctl sign -s /boot/grub/x86_64-efi/grub.efi
-sbctl sign -s /boot/vmlinuz-linux-hardened
 sbctl sign -s /boot/EFI/Linux/arch-hardened.efi
+sbctl verify</code></pre>
 
-# Verify all are signed
-sbctl verify
-
-# In UEFI firmware: re-enable Secure Boot
-
-# Automate re-signing when the kernel or bootloader is updated:
-cat > /etc/pacman.d/hooks/zz-sbctl-sign.hook &lt;&lt; 'EOF'
-[Trigger]
-Operation = Install
-Operation = Upgrade
-Type = Path
-Target = usr/lib/modules/*/vmlinuz
-Target = boot/*.efi
-
-[Action]
-Description = Re-signing EFI binaries after update
-When = PostTransaction
-Exec = /usr/bin/sbctl sign-all -g
-EOF</code></pre>
+  <h3>Kernel Security Parameters</h3>
+  <table>
+    <tr><th>Parameter</th><th>What It Prevents</th></tr>
+    <tr><td><code>init_on_alloc=1</code></td><td>Zeroes memory before allocating it. Prevents newly allocated buffers from exposing old memory contents.</td></tr>
+    <tr><td><code>init_on_free=1</code></td><td>Zeroes memory after freeing it. Reduces data exposure from use-after-free bugs.</td></tr>
+    <tr><td><code>vsyscall=none</code></td><td>Disables the legacy fixed-address vsyscall interface, a common code-reuse target.</td></tr>
+    <tr><td><code>debugfs=off</code></td><td>Prevents debugfs from exposing kernel internals to privileged users or compromised services.</td></tr>
+    <tr><td><code>lockdown=confidentiality</code></td><td>Restricts interfaces that can expose or modify kernel memory, even to root.</td></tr>
+    <tr><td><code>module.sig_enforce=1</code></td><td>Rejects unsigned kernel modules.</td></tr>
+    <tr><td><code>iommu=force</code></td><td>Forces DMA isolation for capable hardware.</td></tr>
+    <tr><td><code>nohibernate</code></td><td>Prevents writing RAM contents, including disk keys, to a hibernation image.</td></tr>
+    <tr><td><code>mitigations=auto</code></td><td>Enables CPU vulnerability mitigations appropriate for the detected processor.</td></tr>
+  </table>
 
   <h3>Finishing the Installation</h3>
-<pre><code>exit              # exit the chroot environment
-umount -R /mnt    # unmount all filesystems cleanly
-cryptsetup close cryptroot   # close the LUKS container
-reboot            # remove the installer USB before the machine POST-boots</code></pre>
+<pre><code>exit
+umount -R /mnt
+cryptsetup close cryptroot
+reboot</code></pre>
 
-  <p>On reboot, the machine should boot from the SATA-to-USB drive, display the GRUB menu (password-protected), prompt for your LUKS passphrase, and complete the boot. If it does not work, boot back from the installer, open the LUKS container, mount the filesystems, chroot in, and troubleshoot the GRUB configuration and initramfs hooks.</p>
+  <p>On reboot, verify that the machine follows the boot profile you selected: either password-protected GRUB loads the mkinitcpio <code>encrypt</code> hook profile, or UEFI launches the signed UKI directly and the systemd initramfs unlocks <code>cryptroot</code>. If TPM2 auto-unlock is desired, complete <a href="#ch19">Chapter 19</a> after confirming the UKI profile boots manually.</p>
 </section>
 
 <!-- Chapter 10 -->
@@ -1960,74 +1974,86 @@ lspci | diff ~/baseline_pci.txt -
     <h2>TPM2 and Measured Boot</h2>
   </div>
 
+  <p class="warn"><strong>Profile requirement:</strong> these TPM2 instructions assume you selected <a href="#ch9">Chapter 9's UKI + Secure Boot + systemd initramfs profile</a>. They are not a drop-in addition to the GRUB + mkinitcpio <code>encrypt</code> hook profile, because systemd TPM2 unlocking relies on <code>systemd-cryptenroll</code>, <code>sd-encrypt</code>, and <code>/etc/crypttab.initramfs</code> rather than GRUB's <code>cryptdevice=</code> command-line flow.</p>
+
   <h3>What a TPM2 Chip Does</h3>
   <p>A Trusted Platform Module (TPM2) is a dedicated security microcontroller present on most modern laptop and desktop motherboards. It provides three functions relevant to your threat model:</p>
   <ol>
-    <li><strong>Measured boot:</strong> As the machine starts, each boot component (UEFI firmware → bootloader → kernel → initramfs) is measured — SHA-256 hashed — and the hash is recorded in a set of registers called Platform Configuration Registers (PCRs). These measurements are created by hardware, not software, and cannot be forged by any software running after the measurement is taken.</li>
-    <li><strong>Key sealing:</strong> The TPM can store a secret (such as the LUKS master key or a key that unlocks a key slot) and bind its release to specific PCR values. If the boot chain has been tampered with, the PCR values will differ from when the key was sealed, and the TPM will refuse to release it.</li>
-    <li><strong>Physical tamper resistance:</strong> The TPM chip is designed to resist physical extraction of secrets. Keys stored inside cannot be retrieved by probing the chip — the chip self-destructs or becomes permanently locked after a number of failed attempts.</li>
+    <li><strong>Measured boot:</strong> As the machine starts, each boot component is measured — SHA-256 hashed — and the hash is recorded in Platform Configuration Registers (PCRs). These measurements are created by hardware, not by later userspace software.</li>
+    <li><strong>Key sealing:</strong> The TPM can release a LUKS unlock secret only when selected PCR values match the values recorded at enrollment. If firmware, Secure Boot state, or signed boot artifacts change unexpectedly, release fails.</li>
+    <li><strong>Physical tamper resistance:</strong> TPM-resident keys are designed not to be extractable by probing the chip, and the TPM can rate-limit or lock out repeated failed attempts.</li>
   </ol>
 
-  <h3>How PCRs Detect Evil Maid Attacks</h3>
+  <h3>How PCRs Fit the UKI Profile</h3>
   <table>
     <tr><th>PCR</th><th>What It Measures</th><th>What Changes It</th></tr>
     <tr><td>PCR0</td><td>UEFI firmware</td><td>Firmware update or replacement</td></tr>
-    <tr><td>PCR1</td><td>UEFI firmware configuration</td><td>BIOS settings change</td></tr>
-    <tr><td>PCR7</td><td>Secure Boot state and keys</td><td>Secure Boot enabled/disabled, key changes</td></tr>
-    <tr><td>PCR4</td><td>Boot manager (GRUB EFI binary)</td><td>GRUB binary replacement — evil maid attack</td></tr>
-    <tr><td>PCR8</td><td>Boot manager configuration</td><td>grub.cfg modification</td></tr>
-    <tr><td>PCR9</td><td>Boot entries, kernel, initramfs</td><td>Kernel or initramfs modification</td></tr>
+    <tr><td>PCR1</td><td>UEFI firmware configuration</td><td>UEFI settings changes</td></tr>
+    <tr><td>PCR7</td><td>Secure Boot state and enrolled keys</td><td>Secure Boot disabled, setup mode entered, or keys changed</td></tr>
+    <tr><td>PCR11</td><td>systemd-stub UKI measurements</td><td>Signed UKI, embedded initramfs, or embedded command line changes</td></tr>
   </table>
 
-  <p>If an evil maid replaces your GRUB binary with a keylogging version: PCR4 changes. The TPM-sealed LUKS key cannot be released. The system falls back to requesting the manual passphrase — and you know immediately that something is wrong, because the system normally auto-unlocks.</p>
+  <p>With the recommended direct-boot UKI path, GRUB is removed or bypassed for normal boot. The important integrity boundary is the signed UKI and the Secure Boot key set that authorizes it. If someone replaces the UKI or changes its embedded command line without your signing key, firmware Secure Boot should refuse to execute it. If firmware settings or measured boot state change in a way covered by your PCR policy, TPM2 auto-unlock fails and the machine falls back to the manual LUKS passphrase.</p>
 
-  <h3>Setting Up TPM2 Auto-Unlock with clevis</h3>
-<pre><code>pacman -S tpm2-tools tpm2-tss clevis
+  <h3>Set Up TPM2 Auto-Unlock with systemd-cryptenroll</h3>
+<pre><code>pacman -S tpm2-tools tpm2-tss systemd
 
 # Verify the TPM2 chip is present and responsive
 ls /dev/tpm*
 # Should show: /dev/tpm0 and /dev/tpmrm0
 
-# Bind a LUKS key slot to TPM2 PCRs
-# PCRs 0,1,7: firmware, config, and Secure Boot (minimum)
-# PCRs 0,1,4,7,8,9: also includes bootloader and kernel (maximum detection)
-clevis luks bind -d /dev/sdX2 tpm2 '{"pcr_ids":"0,1,7,8,9"}'
-# You will be prompted for your LUKS passphrase to authorize adding the new slot
+systemd-analyze has-tpm2
+# Should report TPM2 support, not "no"
 
-# Enable the clevis systemd integration for boot-time TPM unlocking
-systemctl enable clevis-luks-askpass.path
+# Enroll a TPM2-backed LUKS token for the UKI/systemd profile.
+# Start with PCR 7 for Secure Boot state; add PCRs only after testing update behavior.
+systemd-cryptenroll \
+  --tpm2-device=auto \
+  --tpm2-pcrs=7 \
+  /dev/sdX2
+# You will be prompted for your existing LUKS passphrase.
 
-# Rebuild initramfs to include TPM2 support
-mkinitcpio -P</code></pre>
+# Configure systemd-cryptsetup in the initramfs to use the enrolled TPM2 token.
+cat > /etc/crypttab.initramfs &lt;&lt; 'EOF'
+cryptroot UUID=&lt;UUID&gt; - luks,tpm2-device=auto
+EOF
+
+# Rebuild the systemd initramfs and then rebuild/sign the UKI as shown in Chapter 9.
+mkinitcpio -P
+ukify build \
+  --linux=/boot/vmlinuz-linux-hardened \
+  --initrd=/boot/initramfs-linux-hardened.img \
+  --cmdline=@/etc/kernel/cmdline \
+  --secureboot-private-key=/usr/share/secureboot/keys/db/db.key \
+  --secureboot-certificate=/usr/share/secureboot/keys/db/db.pem \
+  --output=/boot/EFI/Linux/arch-hardened.efi
+sbctl sign -s /boot/EFI/Linux/arch-hardened.efi
+sbctl verify</code></pre>
 
   <p><strong>Boot behavior with TPM2 active:</strong></p>
   <ul>
-    <li><strong>Normal boot (no tampering):</strong> PCR values match those recorded during sealing → TPM releases the key → LUKS unlocks automatically → no passphrase required</li>
-    <li><strong>Tampered boot (evil maid attack):</strong> PCR4 (or another PCR) differs → TPM refuses to release the key → system asks for manual passphrase → you know the machine was tampered with</li>
+    <li><strong>Normal boot:</strong> firmware verifies your signed UKI, PCR policy matches, TPM2 releases the enrolled secret, and <code>systemd-cryptsetup</code> unlocks <code>cryptroot</code> without a passphrase.</li>
+    <li><strong>Tampered or policy-changing boot:</strong> Secure Boot blocks unsigned UKI changes, or TPM2 refuses release when selected PCRs no longer match. The system asks for the manual passphrase; treat an unexpected prompt as a tamper signal until investigated.</li>
   </ul>
 
-  <h3>Re-sealing After System Updates</h3>
-<pre><code># After any update that modifies the kernel, initramfs, GRUB, or grub.cfg:
-clevis luks regen -d /dev/sdX2 -s 1
-# -s 1: the key slot number clevis used (check with cryptsetup luksDump)
+  <h3>PCR Selection and Updates</h3>
+  <p>Use a conservative PCR policy first. PCR7 binds unlocking to Secure Boot state and keys, which is stable across normal kernel updates. PCR11 can bind unlocking more tightly to the UKI measured by systemd-stub, but it changes whenever you rebuild the UKI; choose it only if you are prepared to recover with the passphrase and re-enroll after legitimate UKI updates.</p>
 
-# Automate this with a pacman hook:
-cat > /etc/pacman.d/hooks/zz-clevis-regen.hook &lt;&lt; 'EOF'
-[Trigger]
-Operation = Install
-Operation = Upgrade
-Type = Path
-Target = usr/lib/modules/*/vmlinuz
-Target = boot/*.efi
-Target = boot/grub/grub.cfg
+<pre><code># Inspect existing enrollments and token slots
+systemd-cryptenroll /dev/sdX2
+cryptsetup luksDump /dev/sdX2
 
-[Action]
-Description = Re-sealing TPM2 PCR binding after boot component update
-When = PostTransaction
-Exec = /usr/bin/clevis luks regen -d /dev/sdX2 -s 1
-EOF</code></pre>
+# If you intentionally change Secure Boot keys or tighten PCR policy,
+# remove the old TPM2 enrollment and enroll a new one while booted trusted.
+systemd-cryptenroll --wipe-slot=tpm2 /dev/sdX2
+systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 /dev/sdX2
 
-  <p class="warn">If you update the kernel or bootloader without re-sealing, the next boot will fail TPM attestation and request the manual passphrase. This is safe — you simply enter your passphrase manually — but you must then re-seal before the next reboot to restore automatic unlocking.</p>
+# Then rebuild and re-sign the UKI per the Chapter 9 UKI profile.
+mkinitcpio -P
+ukify build --linux=/boot/vmlinuz-linux-hardened --initrd=/boot/initramfs-linux-hardened.img --cmdline=@/etc/kernel/cmdline --secureboot-private-key=/usr/share/secureboot/keys/db/db.key --secureboot-certificate=/usr/share/secureboot/keys/db/db.pem --output=/boot/EFI/Linux/arch-hardened.efi
+sbctl sign -s /boot/EFI/Linux/arch-hardened.efi</code></pre>
+
+  <p class="warn">Always keep a strong passphrase slot. TPM2 auto-unlock is a convenience and tamper signal, not a replacement for recovery credentials. If an update, firmware change, or PCR policy change prevents TPM2 release, boot with the passphrase, verify what changed, and re-enroll only after you trust the new boot state.</p>
 </section>
 
 <!-- ═══════════════════════════════════════════════════════════
@@ -2646,18 +2672,18 @@ gpg --armor --sign --encrypt --recipient recipient@email.com message.txt</code><
     <li>Diceware passphrase: 6+ words, generated with physical dice, memorized</li>
     <li>LUKS header: standard or detached (stored separately from drive)</li>
     <li><code>linux-hardened</code> kernel installed</li>
-    <li><code>encrypt</code> hook present in <code>/etc/mkinitcpio.conf</code>, in correct position</li>
-    <li>initramfs rebuilt after any hook or kernel change</li>
+    <li>Selected one Chapter 9 boot profile and kept hooks/cmdline consistent: GRUB uses <code>encrypt</code> + <code>cryptdevice=</code>; UKI uses <code>systemd</code>/<code>sd-encrypt</code> + <code>/etc/crypttab.initramfs</code></li>
+    <li>initramfs and, if using UKI, signed UKI rebuilt after any hook or kernel change</li>
   </ul>
 
   <h3>Boot Security</h3>
   <ul class="checklist">
     <li>UEFI administrator password set</li>
     <li>Boot order locked: only your SATA-to-USB drive, all other paths disabled</li>
-    <li>Secure Boot enabled with your custom keys (sbctl)</li>
-    <li>GRUB password set with PBKDF2 hash</li>
-    <li>TPM2 measured boot configured (clevis) if TPM2 chip is present</li>
-    <li>pacman hook re-signs EFI binaries and re-seals TPM after updates</li>
+    <li>Secure Boot enabled with your custom keys (sbctl) for the UKI profile, or GRUB integrity mitigations documented for the GRUB profile</li>
+    <li>GRUB password set with PBKDF2 hash if GRUB remains in the boot path</li>
+    <li>TPM2 measured boot configured with <code>systemd-cryptenroll</code> only when using the UKI + systemd profile</li>
+    <li>Update process rebuilds initramfs/UKI, re-signs EFI binaries, and re-enrolls TPM2 only after trusted boot-state changes</li>
   </ul>
 
   <h3>System Hardening</h3>
