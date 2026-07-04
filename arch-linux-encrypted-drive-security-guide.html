@@ -1042,6 +1042,20 @@ vim /etc/default/grub</code></pre>
   nohibernate \
   mitigations=auto"
 
+  <table>
+    <tr><th>Parameter</th><th>What It Prevents</th></tr>
+    <tr><td><code>init_on_alloc=1</code></td><td>Zeroes memory before allocating it. Prevents "heap spray" attacks that read old memory contents from newly allocated buffers.</td></tr>
+    <tr><td><code>init_on_free=1</code></td><td>Zeroes memory after freeing it. Prevents use-after-free vulnerabilities from leaking data.</td></tr>
+    <tr><td><code>vsyscall=none</code></td><td>Disables the legacy vsyscall interface at a fixed kernel address. This address is a common known-location exploit trampoline — attackers jump here during code reuse attacks.</td></tr>
+    <tr><td><code>debugfs=off</code></td><td>Disables the debugfs virtual filesystem. Without this, debugfs exposes internal kernel data structures that an attacker with any code execution can use to escalate privileges or read kernel memory.</td></tr>
+    <tr><td><code>lockdown=confidentiality</code></td><td>Activates kernel lockdown mode at the most restrictive level. Prevents userspace from reading or writing kernel memory via /dev/mem, kexec, hibernation, or other privileged interfaces. Even root cannot extract kernel secrets.</td></tr>
+    <tr><td><code>module.sig_enforce=1</code></td><td>Rejects any kernel module not signed with the kernel's build-time signing key. Prevents an attacker with root access from loading a malicious kernel module.</td></tr>
+    <tr><td><code>iommu=force</code></td><td>Forces strict IOMMU enforcement. Without IOMMU, any PCIe device (or a device pretending to be one via Thunderbolt DMA) can read and write all physical RAM, including the LUKS decryption key.</td></tr>
+    <tr><td><code>nohibernate</code></td><td>Disables hibernation. A hibernate image contains an exact snapshot of live RAM — including the LUKS decryption key and application secrets — on persistent media. That is unsafe for this guide's threat model even if the swap area that stores the image is encrypted.</td></tr>
+    <tr><td><code>mitigations=auto</code></td><td>Enables all hardware vulnerability mitigations (Spectre, Meltdown, MDS, etc.) appropriate for the detected CPU. These prevent speculative execution attacks that could leak the LUKS key from kernel memory.</td></tr>
+  </table>
+
+<pre><code>grub-mkconfig -o /boot/grub/grub.cfg</code></pre>
 grub-mkconfig -o /boot/grub/grub.cfg</code></pre>
 
   <h4>GRUB password protection</h4>
@@ -1275,19 +1289,51 @@ systemctl mask cups
 systemctl enable --now NetworkManager
 systemctl enable --now tor</code></pre>
 
-  <h3>Encrypted Swap or No Swap</h3>
-  <p>Swap space writes RAM contents to disk. Without encryption, the LUKS master key — which lives in RAM while the drive is mounted — could theoretically be paged to swap and then recovered from disk after the machine is powered off. Never use unencrypted swap on this system.</p>
-<pre><code># Option 1: Encrypt swap with an ephemeral random key (different on every boot)
-# Add to /etc/crypttab:
+  <h3>Swap Policy: Prefer No Disk Swap, Use zram If Needed</h3>
+  <p>For the highest-risk users, the safest recommendation is <strong>no disk swap at all</strong>. Disk swap writes memory pages to persistent media, which can expose LUKS keys, session tokens, document contents, chat logs, browser state, and other live secrets after shutdown or seizure. Never use unencrypted disk swap on this system.</p>
+  <p>If you need memory-pressure relief, use <strong>zram</strong> as the default mitigation. zram creates a compressed swap device in RAM, so swapped pages stay volatile and disappear on power-off instead of being written to the encrypted drive.</p>
+<pre><code># Preferred for highest-risk systems: no disk swap
+swapoff -a
+# Remove all swap entries from /etc/fstab and any swap mappings from /etc/crypttab
+
+# Default fallback when swap is needed: zram, not disk swap
+pacman -S zram-generator
+
+cat > /etc/systemd/zram-generator.conf &lt;&lt; 'EOF'
+[zram0]
+zram-size = min(ram / 2, 4096)
+compression-algorithm = zstd
+swap-priority = 100
+EOF
+
+systemctl daemon-reload
+systemctl start systemd-zram-setup@zram0.service
+swapon --show
+
+# Keep disk-backed swap disabled unless you have a specific operational need</code></pre>
+  <p>Only use ephemeral encrypted disk swap as a lower-preference fallback when zram is insufficient and adding RAM is not possible. It must use a fresh random key on every boot, must never be used for resume or hibernation, and should be removed again when the operational need ends.</p>
+<pre><code># Lower-preference fallback: ephemeral encrypted disk swap
+# Add to /etc/crypttab only if zram is insufficient:
 swap  /dev/sdXY  /dev/urandom  swap,cipher=aes-xts-plain64,size=512,sector-size=4096
 
 # Add to /etc/fstab:
-/dev/mapper/swap  none  swap  defaults  0 0
+/dev/mapper/swap  none  swap  defaults,noauto  0 0
 
-# Option 2 (preferred for high-threat environments): disable swap entirely
-swapoff -a
-# Remove all swap entries from /etc/fstab
-# If more RAM is needed, add physical RAM rather than using swap</code></pre>
+# Enable only for the session where it is needed:
+swapon /dev/mapper/swap</code></pre>
+  <p>Explicitly disable resume and hibernation paths so the system never writes a suspend image containing live secrets to persistent media. Also ensure your bootloader command line contains <code>nohibernate</code> and no <code>resume=</code> or <code>resume_offset=</code> parameters.</p>
+<pre><code># Disable systemd hibernation and hybrid-sleep entry points
+systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+systemctl mask systemd-hibernate.service systemd-hybrid-sleep.service systemd-suspend-then-hibernate.service
+
+# Remove resume hooks and kernel parameters if present
+sed -i 's/ resume / /g; s/ resume$//g' /etc/mkinitcpio.conf
+perl -0pi -e 's/\s+resume(_offset)?=[^ "\n]+//g' /etc/default/grub
+mkinitcpio -P
+grub-mkconfig -o /boot/grub/grub.cfg
+
+# For UKI users, also remove resume= and resume_offset= from /etc/kernel/cmdline,
+# keep nohibernate, then rebuild and re-sign the UKI.</code></pre>
 
   <h3>Disable Shell History</h3>
 <pre><code># Shell history files are forensic goldmines — they record every command ever typed
@@ -2580,7 +2626,7 @@ chattr +i /etc/resolv.conf  # prevent NetworkManager from overwriting this</code
 
   <h3>Physical Security Habits</h3>
 
-  <p><strong>Shut down, never sleep.</strong> When your machine is sleeping or hibernating (despite <code>nohibernate</code>), the LUKS decryption key remains in RAM. Cold boot attacks require a powered-on or recently powered-off machine with RAM contents that have not yet decayed. When you power off completely, RAM loses all contents within seconds to minutes (faster if cooled; slower in freezing temperatures). Always shut down:</p>
+  <p><strong>Shut down, never sleep or hibernate.</strong> Sleep keeps the LUKS decryption key and other live secrets in RAM. Hibernation writes a snapshot of those live secrets to persistent media; that remains unsafe for this guide's threat model even when the swap area is encrypted. Cold boot attacks require a powered-on or recently powered-off machine with RAM contents that have not yet decayed. When you power off completely, RAM loses all contents within seconds to minutes (faster if cooled; slower in freezing temperatures). Always shut down:</p>
 <pre><code># Configure automatic shutdown on lid close:
 # In /etc/systemd/logind.conf:
 HandleLidSwitch=poweroff
@@ -2626,7 +2672,7 @@ exec swayidle -w \
   <h3>Travel Security</h3>
   <p>Border crossings are a specific high-risk scenario. Customs officers in many countries can legally demand device access, and in some jurisdictions (United States, United Kingdom, Australia) refusal can result in detention, fines, or device seizure.</p>
   <ul>
-    <li><strong>Power down before any checkpoint.</strong> A powered-off, encrypted drive requires the passphrase to access. Agents cannot access its contents through UEFI menus or boot manipulation if Secure Boot is configured correctly. Do not sleep, do not hibernate — shut down completely.</li>
+    <li><strong>Power down before any checkpoint.</strong> A powered-off, encrypted drive requires the passphrase to access. Agents cannot access its contents through UEFI menus or boot manipulation if Secure Boot is configured correctly. Do not sleep and do not hibernate: hibernation stores live secrets on persistent media even when the swap area is encrypted. Shut down completely.</li>
     <li><strong>Consider traveling without sensitive data.</strong> For very high-risk crossings, leave the encrypted drive at your destination and travel with a clean machine or no machine at all. Retrieve the drive after crossing, or use secure remote access to your data from a trusted machine at the destination.</li>
     <li><strong>Know the specific law for your specific crossing.</strong> The rules differ between countries and even between entry points within the same country. Have a lawyer's number accessible before you cross.</li>
     <li><strong>Have a plan if the device is seized.</strong> What will you say? Who will you call? Will you provide the outer/decoy passphrase? Will you refuse? Decide in advance — you will not be given time to think at the checkpoint.</li>
