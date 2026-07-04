@@ -2174,7 +2174,7 @@ bash kubo/install.sh
 useradd -r -d /var/lib/ipfs -s /sbin/nologin ipfs
 mkdir -p /var/lib/ipfs && chown ipfs /var/lib/ipfs</code></pre>
 
-  <div class="code-header">📄 Initialize and configure IPFS</div>
+  <div class="code-header">📄 Initialize and configure Kubo</div>
 <pre><code>sudo -u ipfs IPFS_PATH=/var/lib/ipfs ipfs init --profile server
 
 <span class="c"># Configure to listen on all interfaces (including mesh)</span>
@@ -2189,7 +2189,7 @@ sudo -u ipfs IPFS_PATH=/var/lib/ipfs ipfs config --json Pubsub.Enabled true</cod
 
   <div class="code-header">📄 /etc/systemd/system/ipfs.service</div>
 <pre><code>[Unit]
-Description=IPFS Kubo Node
+Description=Kubo IPFS Node
 After=network.target
 
 [Service]
@@ -2203,31 +2203,49 @@ LimitNOFILE=65536
 WantedBy=multi-user.target</code></pre>
 
 <pre><code>systemctl daemon-reload && systemctl enable --now ipfs
-<span class="c"># Watch it connect to the global IPFS network</span>
+<span class="c"># Watch it connect to the public IPFS network</span>
 journalctl -fu ipfs
 
 <span class="c"># Check peer count</span>
 IPFS_PATH=/var/lib/ipfs ipfs swarm peers | wc -l</code></pre>
 
-  <h3>Private IPFS Network (Swarm Key)</h3>
+  <h3>Private Kubo Network (Swarm Key)</h3>
   <p>
-    By default, Kubo connects to the public IPFS network. For a closed mesh deployment,
-    generate a swarm key — only nodes with the same key can connect to each other.
+    By default, Kubo joins the public IPFS network. For a closed Kubo mesh deployment,
+    place the same <code>swarm.key</code> file in every node's <code>IPFS_PATH</code>;
+    only nodes with that pre-shared key can connect to each other.
+  </p>
+  <p>
+    Kubo expects the swarm key to use the libp2p PSK format shown below. Generating
+    this file manually with <code>openssl rand</code> avoids relying on old helper
+    repositories while staying compatible with current Kubo private-network support.
   </p>
 
-  <div class="code-header">📄 Generate and distribute swarm key</div>
-<pre><code><span class="c"># On ONE node, generate the swarm key</span>
-go install github.com/Kubuxu/go-ipfs-swarm-key-gen/ipfs-swarm-key-gen@latest
-~/go/bin/ipfs-swarm-key-gen > /var/lib/ipfs/swarm.key
-chown ipfs /var/lib/ipfs/swarm.key
+  <div class="code-header">📄 Generate and distribute Kubo swarm key</div>
+<pre><code><span class="c"># On ONE node, generate a Kubo-compatible libp2p PSK swarm key</span>
+install -o ipfs -g ipfs -m 0700 -d /var/lib/ipfs
+{
+  printf '/key/swarm/psk/1.0.0/\n/base16/\n'
+  openssl rand -hex 32
+} | install -o ipfs -g ipfs -m 0400 /dev/stdin /var/lib/ipfs/swarm.key
 
-<span class="c"># Copy swarm.key to all other IPFS nodes via secure channel (XMPP OMEMO)</span>
-<span class="c"># Remove bootstrap nodes for a fully private network</span>
+<span class="c"># Expected swarm.key format</span>
+<span class="c"># /key/swarm/psk/1.0.0/</span>
+<span class="c"># /base16/</span>
+<span class="c"># &lt;64 lowercase hex characters from 32 random bytes&gt;</span>
+
+<span class="c"># Legacy helper (unmaintained/old, but still emits the same Kubo-compatible format)</span>
+<span class="c"># go install github.com/Kubuxu/go-ipfs-swarm-key-gen/ipfs-swarm-key-gen@latest</span>
+<span class="c"># ~/go/bin/ipfs-swarm-key-gen > /var/lib/ipfs/swarm.key</span>
+<span class="c"># chown ipfs:ipfs /var/lib/ipfs/swarm.key && chmod 0400 /var/lib/ipfs/swarm.key</span>
+
+<span class="c"># Copy swarm.key to all other Kubo nodes via secure channel (XMPP OMEMO)</span>
+<span class="c"># Remove public bootstrap nodes for a fully private Kubo network</span>
 sudo -u ipfs IPFS_PATH=/var/lib/ipfs ipfs bootstrap rm --all
 
-<span class="c"># Add your own nodes as bootstrap</span>
+<span class="c"># Add your own Kubo nodes as bootstrap peers</span>
 sudo -u ipfs IPFS_PATH=/var/lib/ipfs ipfs bootstrap add \
-  /ip4/10.10.1.1/tcp/4001/p2p/&lt;QmPeerID-of-node1&gt;</code></pre>
+  /ip4/10.10.1.1/tcp/4001/p2p/&lt;PeerID-of-node1&gt;</code></pre>
 
   <h3>Publishing and Pinning Content</h3>
 
