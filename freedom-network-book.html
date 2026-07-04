@@ -8142,23 +8142,27 @@ systemctl enable --now xray</code></pre>
 
   <h3>Stealth Layer 3 — Meek: Domain Fronting over CDN</h3>
   <p>
-    Domain fronting routes traffic through a CDN (Cloudflare, Fastly, Azure CDN) using a
-    front domain in the SNI field and the real destination in the HTTP Host header.
-    The network sees a connection to <code>cloudflare.com</code>; the CDN internally
-    forwards to your server. Blocking it requires blocking the entire CDN — which is
-    economically prohibitive for most states.
+    Classic domain fronting attempts to route traffic through a CDN by sending one
+    hostname in TLS/SNI and another in the HTTP Host header. This behavior is often
+    blocked, unsupported, or contractually prohibited by major CDNs, and any specific
+    provider or front domain should be treated as usable only after current verification.
+    If a CDN still permits the mismatch for a particular service, blocking that front may
+    create collateral damage; if the CDN rejects it, the technique simply will not work.
   </p>
 
-  <div class="code-header">📄 Meek-azure transport (available in Tor Browser, reusable standalone)</div>
-<pre><code"><span class="c"># meek-server runs behind Azure CDN or any CDN that ignores Host mismatch
-# meek-client wraps any TCP stream through the CDN tunnel
+  <div class="code-header">📄 Historical/illustrative meek transport pattern — not guaranteed operational</div>
+<pre><code"><span class="c"># Historical example only: meek-server required a CDN/front that allowed Host mismatch.
+# Major CDNs often block or do not support classic domain fronting today.
+# Verify current Tor Project pluggable transport documentation and bridge lines before use.
+# meek-client wraps a TCP stream through the transport when a supported bridge exists.
 
 # Install meek-client on operator's laptop:</span>
 go install gitlab.com/yawning/meek/meek-client@latest
 
-<span class="c"># Run: connects to Azure CDN front, tunnels to your meek-server</span>
-meek-client --url=https://ajax.aspnetcdn.com/ \
-  --front=ajax.aspnetcdn.com \
+<span class="c"># Illustrative run pattern only: replace URL/front/bridge details with currently
+# supported values from Tor Project documentation, if any are available.</span>
+meek-client --url=https://FRONT-DOMAIN.example/ \
+  --front=FRONT-DOMAIN.example \
   --target=YOUR_MEEK_SERVER_IP:8080 \
   --log=- &amp;
 
@@ -8166,11 +8170,11 @@ meek-client --url=https://ajax.aspnetcdn.com/ \
 # OpenVPN client: --socks-proxy 127.0.0.1 9050</span></code></pre>
 
   <div class="info-box warn">
-    <strong>CDN Terms of Service</strong>
-    Domain fronting violates the ToS of most CDNs. Cloudflare and Google have actively
-    broken it. Azure and Fastly have been more tolerant. Use this technique as a
-    last-resort emergency transport, not your primary tunnel. In a shutdown scenario, ToS
-    enforcement is the least of your problems.
+    <strong>Current support required</strong>
+    Treat classic domain fronting as conditional and fragile: it is often blocked or
+    unsupported by major CDNs and may violate provider terms. Do not assume any named CDN
+    is generally usable. Before relying on meek or any Tor bridge, verify the currently
+    supported Tor pluggable transports and bridge lines from Tor Project documentation.
   </div>
 
   <h3>Stealth Layer 4 — Port Knocking: Invisible Listeners</h3>
@@ -8938,20 +8942,23 @@ Bridge obfs4 198.51.100.5:8443 FINGERPRINT \
 <span class="c"># With this config Tor looks like random bytes on TCP 8443</span>
 <span class="c"># DPI cannot detect it as Tor or any known VPN protocol</span></code></pre>
 
-  <h3>meek-azure Bridge — Blocking Requires Blocking Microsoft</h3>
+  <h3>meek-azure Bridge — Historical/Illustrative CDN-Fronted Bridge</h3>
   <p>
-    meek wraps Tor traffic inside HTTPS to a CDN front domain. The network sees a TLS
-    connection to <code>ajax.aspnetcdn.com</code> (Azure CDN). Blocking it means blocking
-    all of Azure — extremely high collateral damage for the censor.
+    meek can wrap Tor traffic inside HTTPS to a CDN front domain when a supported bridge
+    and front are available. Classic domain-fronted bridge lines, including older
+    meek-azure examples, should be treated as historical or illustrative unless Tor
+    Project documentation currently lists them as supported. Blocking a working front can
+    create collateral damage, but unsupported fronts may fail without providing any
+    circumvention benefit.
   </p>
 
-  <div class="code-header">📄 Operator torrc — meek-azure (built into Tor Browser)</div>
+  <div class="code-header">📄 Historical torrc pattern — verify current Tor Project bridge lines</div>
 <pre><code>UseBridges 1
 ClientTransportPlugin meek_lite exec /path/to/meek-client
-Bridge meek_lite 192.0.2.18:443 url=https://ajax.aspnetcdn.com/ front=ajax.aspnetcdn.com
+Bridge meek_lite 192.0.2.18:443 url=https://FRONT-DOMAIN.example/ front=FRONT-DOMAIN.example
 
-<span class="c"># meek_lite is included in Tor Browser's PT bundle</span>
-<span class="c"># No server setup needed — uses Microsoft's CDN as the front</span></code></pre>
+<span class="c"># Historical/illustrative only; not guaranteed to work.</span>
+<span class="c"># Verify currently supported Tor pluggable transports and bridge lines in Tor Project documentation.</span></code></pre>
 
   <h3>Vanguards — Defending Hidden Services Against Correlation</h3>
   <p>
