@@ -1541,11 +1541,11 @@ mat2 --inplace /path/to/directory/*.pdf</code></pre>
   <h3>Disabling Access Timestamps</h3>
   <p>Every time a file is read on a default ext4 filesystem, the kernel updates the file's <code>atime</code> (access time). Over time, these timestamps build a detailed record of your reading patterns — which files you accessed, in what order, and when. A forensic analyst examining a decrypted drive can reconstruct a day-by-day activity log purely from atime entries.</p>
 <pre><code># In /etc/fstab, add noatime and nodiratime to the root mount:
-/dev/mapper/cryptroot  /  ext4  defaults,noatime,nodiratime,data=writeback  0 1
+/dev/mapper/cryptroot  /  ext4  defaults,noatime,nodiratime  0 1
 
 # noatime: do not update file access times on read
 # nodiratime: do not update directory access times on read
-# data=writeback: only journal metadata, not file data (reduces journal forensic artifacts)
+# defaults: keep ext4's normal ordered journaling for crash recovery
 
 # Verify the mount options are active:
 mount | grep cryptroot
@@ -1603,21 +1603,28 @@ rm -f file_to_delete  # rather than moving to trash</code></pre>
   <p>The ext4 journal is a write-ahead log designed for crash recovery. Before committing filesystem changes, ext4 records them in the journal. This means recently deleted file contents may remain readable in the journal for some time after deletion, even after the filesystem marks the space as free.</p>
   <p>A forensic analyst who examines a decrypted ext4 volume with standard tools (<code>debugfs</code>, Autopsy, Sleuth Kit) can sometimes recover recently-written data directly from the journal without needing to carve unallocated space.</p>
 
-  <p><strong>Mitigation options:</strong></p>
-<pre><code># Option A: data=writeback mode (recommended balance of safety and anti-forensics)
+  <p><strong>Safer default:</strong> keep ext4's normal ordered journal mode and combine it with the access-time reduction from Chapter 13. This avoids creating extra access-history metadata while preserving the filesystem's normal crash-recovery behavior.</p>
+<pre><code># In /etc/fstab:
+/dev/mapper/cryptroot  /  ext4  defaults,noatime,nodiratime  0 1</code></pre>
+
+  <h3>Advanced / High-Risk: Reducing or Disabling ext4 Journaling</h3>
+  <p class="warn"><strong>Do not treat these options as defaults.</strong> <code>data=writeback</code> and journal removal reduce some journal artifacts, but they also weaken the filesystem behavior you rely on when something goes wrong.</p>
+  <p>In <code>data=writeback</code> mode, only filesystem metadata is journaled; file data is written directly. Disabling the journal removes even more crash-recovery protection. Both choices increase the chance of file corruption or stale data exposure after power loss, kernel panic, accidental unplugging, or a loose USB connection. That risk is especially important for a portable encrypted drive.</p>
+  <p>These settings can also conflict with this guide's emergency shutdown and destruction scenarios. A sudden power cut, forced shutdown, or rapid USB disconnect may be exactly when you most need the filesystem to remain consistent and bootable afterward. If the journal has been weakened or removed, the emergency action that protects you operationally can leave the volume harder to recover or verify.</p>
+  <p>Only consider these options after you have tested, restorable backups of the full encrypted volume and of any irreplaceable working files. Test the restore process before enabling the setting, not after the first failure.</p>
+<pre><code># High-risk option A: data=writeback mode
 # Only filesystem metadata is journaled; file data is written directly
 # Deleted file content is less likely to appear in the journal
 # In /etc/fstab:
 /dev/mapper/cryptroot  /  ext4  defaults,noatime,nodiratime,data=writeback  0 1
 
-# Option B: Disable the journal entirely (maximum anti-forensics; less crash safety)
-# Only do this while the filesystem is unmounted
+# High-risk option B: Disable the journal entirely
+# Only do this while the filesystem is unmounted and after tested backups exist
 tune2fs -O ^has_journal /dev/mapper/cryptroot
 # Re-enable if needed:
-tune2fs -O has_journal /dev/mapper/cryptroot
+tune2fs -O has_journal /dev/mapper/cryptroot</code></pre>
 
-# For a portable drive that you shut down properly, disabling the journal
-# is a reasonable trade-off — crash recovery is less critical when you control shutdowns</code></pre>
+  <p><strong>Safer alternatives:</strong> leave ext4 journaling at its normal default, then move the highest-risk working data into RAM-backed locations instead. Use <code>tmpfs</code> for sensitive working directories, browser/application caches, <code>/tmp</code>, and <code>/var/tmp</code>; use <code>Storage=volatile</code> for systemd-journald so logs live under <code>/run</code> and disappear on shutdown. These approaches reduce persistent artifacts without sacrificing as much filesystem crash safety.</p>
 
   <h3>Btrfs as an Alternative</h3>
   <p>Btrfs offers capabilities useful for anti-forensics that ext4 does not provide natively:</p>
@@ -2787,7 +2794,7 @@ gpg --armor --sign --encrypt --recipient recipient@email.com message.txt</code><
     <li><code>~/.cache</code>, <code>/tmp</code>, <code>/var/tmp</code> on tmpfs</li>
     <li><code>noatime,nodiratime</code> on all persistent mounts</li>
     <li>mat2 and exiftool installed; metadata scrubbed from all files before sharing</li>
-    <li>ext4 journal configured to <code>data=writeback</code> or disabled</li>
+    <li>ext4 journal left at the safer default unless you have a tested-backup reason to accept <code>data=writeback</code> or journal removal risk</li>
   </ul>
 
   <h3>Drive Seizure Resistance</h3>
