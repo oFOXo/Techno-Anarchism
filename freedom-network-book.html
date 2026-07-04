@@ -8866,8 +8866,23 @@ cat /var/lib/tor/ssh/hostname
 
   <h3>Configuring Matrix to Federate Over Tor</h3>
   <p>
-    Synapse can reach other Matrix servers over Tor when both are running hidden services.
-    This allows inter-mesh federation without either server ever appearing on the clearnet.
+    Synapse can reach other Matrix servers over Tor when both sides have reachable federation
+    listeners and route outbound federation through Tor. This allows inter-mesh federation
+    without either server exposing its origin IP address, but <code>public_baseurl</code> by
+    itself is not enough for federation discovery.
+  </p>
+  <p>
+    Matrix federation discovery starts from the homeserver's <code>server_name</code>. Remote
+    servers resolve that name using the standard discovery chain: direct server-name lookup,
+    DNS SRV records, or delegation via <code>/.well-known/matrix/server</code>. If you publish
+    an onion federation endpoint, you still need a valid delegation strategy, such as serving
+    <code>/.well-known/matrix/server</code> from the ordinary server-name domain and pointing
+    it at the onion host and port, where that pattern is supported by your Synapse version,
+    reverse proxy, TLS policy, and the remote servers you federate with.
+  </p>
+  <p>
+    Remote Synapse servers must also be able to reach <code>.onion</code> addresses through Tor;
+    otherwise they may discover the onion endpoint correctly but fail to connect to it.
   </p>
 
   <div class="code-header">📄 /etc/matrix-synapse/homeserver.yaml — Tor federation patches</div>
@@ -8878,12 +8893,19 @@ proxy_config:
     port: 9050    <span class="c"># local Tor SOCKS proxy on the Synapse VM</span>
     password: ""
 
-<span class="c"># Announce the onion address as the server's public_baseurl for federation</span>
-public_baseurl: https://abc123xyzabcxyz.onion/
+<span class="c"># public_baseurl is for client-facing URLs; it is NOT sufficient</span>
+<span class="c"># to make other homeservers discover your federation endpoint.</span>
+public_baseurl: https://matrix.mesh.local/
 
-<span class="c"># Add the .onion address to the server's well-known delegation</span>
-<span class="c"># so remote servers can discover it</span>
+<span class="c"># Federation discovery starts from this server name.</span>
+<span class="c"># Remote servers use the server_name, DNS SRV, or</span>
+<span class="c"># /.well-known/matrix/server delegation to find the listener.</span>
 server_name: "mesh.local"</code></pre>
+
+  <div class="code-header">📄 https://mesh.local/.well-known/matrix/server — onion delegation example</div>
+<pre><code>{
+  "m.server": "abc123xyzabcxyz.onion:443"
+}</code></pre>
 
   <div class="code-header">📄 Install Tor SOCKS proxy on the Synapse VM (separate from tor-gateway)</div>
 <pre><code>apt install -y tor
