@@ -9377,8 +9377,12 @@ uri = /metrics
 <span class="c"># Download latest YaCy release</span>
 wget https://github.com/yacy/yacy_search_server/releases/latest/\
 download/yacy_v1_latest.tar.gz
-tar xzf yacy_v1_latest.tar.gz -C /opt/
-mv /opt/yacy_v1_latest /opt/yacy
+tmpdir=$(mktemp -d)
+tar xzf yacy_v1_latest.tar.gz -C "$tmpdir"
+yacy_dir=$(find "$tmpdir" -type f \( -name startYACY.sh -o -path '*/lib/yacy.jar' \) \
+  -printf '%h\n' | sed 's#/lib$##' | head -n1)
+mv "$yacy_dir" /opt/yacy
+rmdir "$tmpdir"
 useradd -r -d /opt/yacy -s /bin/false yacy
 chown -R yacy:yacy /opt/yacy
 
