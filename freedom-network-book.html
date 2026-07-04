@@ -9697,17 +9697,31 @@ batctl if add wlan0</code></pre>
   <h3>LoRa / LoRaWAN</h3>
   <p>
     LoRa (Long Range) operates in the sub-GHz ISM band and achieves 2–20 km range at
-    very low power (10 mW) but low data rate (250 bps – 11 kbps). Ideal for:
+    very low power (10 mW) but low data rate (250 bps – 11 kbps). It is suitable for
+    sparse, delay-tolerant messages or purpose-built protocols, such as:
   </p>
   <ul>
-    <li>Text messages (Nostr events, XMPP messages fit in LoRa packets)</li>
-    <li>Routing protocol messages (batman-adv OGMs, Yggdrasil peering)</li>
-    <li>Sensor data, emergency alerts</li>
-    <li>Long-distance relay between mesh islands where WiFi can't reach</li>
+    <li>Short text messages and small event payloads designed for LoRa-sized packets</li>
+    <li>Reticulum, Meshtastic, APRS-style packets, or custom store-and-forward message bridges</li>
+    <li>Sensor data, emergency alerts, and periodic status beacons</li>
+    <li>Long-distance low-throughput relay between mesh islands where WiFi cannot reach</li>
   </ul>
 
-  <div class="code-header">📄 LoRa ↔ Ethernet bridge concept</div>
-<pre><code><span class="c"># Hardware: Two LoRa radios (e.g., RAK811, SX1276-based modules) + Raspberry Pi each side</span>
+  <div class="callout warning">
+    <strong>Do not treat LoRa like Ethernet.</strong> Ethernet-over-LoRa bridges are experimental
+    and usually impractical for production networks. Tiny payload sizes, MTU fragmentation,
+    multi-second latency, limited airtime, and regional regulatory duty-cycle limits make
+    generic TAP/batman-adv/Yggdrasil-over-LoRa designs unreliable. Prefer Reticulum,
+    Meshtastic, APRS-style packets, or a custom store-and-forward bridge that speaks in
+    small application messages instead of Ethernet frames.
+  </div>
+
+  <div class="code-header">📄 LoRa ↔ Ethernet bridge concept (lab-only experiment)</div>
+<pre><code><span class="c"># LAB ONLY — not a production recommendation.</span>
+<span class="c"># Ethernet-over-LoRa is constrained by MTU, latency, airtime, and duty-cycle limits.</span>
+<span class="c"># Prefer Reticulum, Meshtastic, APRS-style packets, or custom store-and-forward messages.</span>
+
+<span class="c"># Hardware: Two LoRa radios (e.g., RAK811, SX1276-based modules) + Raspberry Pi each side</span>
 
 <span class="c"># Side A: Ethernet → serial → LoRa TX</span>
 socat TCP-LISTEN:7000,fork FILE:/dev/ttyUSB0,b115200 &
@@ -9715,9 +9729,10 @@ socat TCP-LISTEN:7000,fork FILE:/dev/ttyUSB0,b115200 &
 <span class="c"># Side B: LoRa RX → serial → TAP interface</span>
 socat TCP:sideA-ip:7000 FILE:/dev/ttyUSB0,b115200 &
 
-<span class="c"># Create TAP device and add to batman-adv</span>
+<span class="c"># Create a tiny-MTU TAP device for controlled lab experiments only</span>
 ip tuntap add dev tap-lora mode tap
-ip link set tap-lora up mtu 230  <span class="c"># LoRa max payload ≈ 230 bytes</span>
+ip link set tap-lora up mtu 230  <span class="c"># LoRa max payload ≈ 230 bytes before overhead</span>
+<span class="c"># Optional lab test only: adding this to batman-adv will be slow and fragile.</span>
 batctl if add tap-lora</code></pre>
 
   <h3>Meshtastic</h3>
