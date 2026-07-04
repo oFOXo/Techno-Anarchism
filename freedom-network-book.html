@@ -1469,10 +1469,13 @@ systemctl enable --now asterisk</code></pre>
 
   <div class="info-box tip">
     <strong>LoRa Voice?</strong>
-    For truly low-bandwidth situations, replace Opus (normal VoIP codec) with Codec2 — an
-    open-source speech codec designed for ham radio at 700–3200 bps. A LoRa link at
-    SF12, BW125kHz (~250 bps) is too slow for real-time voice; use it for text (Nostr/XMPP).
-    A LoRa link at SF7, BW500kHz (~11 kbps) can carry Codec2 at 2400 bps with overhead.
+    Codec2 over LoRa is experimental and generally not suitable for reliable real-time voice,
+    even when the raw bitrate looks high enough. Practical limits include half-duplex operation,
+    packet overhead and retransmissions, latency and jitter, legal duty-cycle or channel-occupancy
+    limits, and regional restrictions on 500 kHz LoRa channels. Treat LoRa as a store-and-forward
+    medium for short voice clips or text (Nostr/XMPP/Reticulum LXMF), and reserve live voice for
+    higher-throughput links such as WiFi, VHF/UHF digital modes designed for voice, or IP links
+    that can carry normal VoIP.
   </div>
 </section>
 
