@@ -356,13 +356,13 @@
     <li>Potentially: the ability to access a running, networked machine remotely if your device was compromised before seizure</li>
   </ul>
 
-  <p><strong>What they do not have (against a properly configured system):</strong></p>
+  <p><strong>What they do not have under the assumptions below:</strong> These claims assume a strong passphrase, correct LUKS configuration, a powered-off system at seizure, no plaintext written before encryption, no seized LUKS header or key backups, no compromised firmware or boot chain, and no access to the decrypted filesystem.</p>
   <ul>
-    <li>Any mathematical attack against AES-256. None exists. Even theoretical quantum attacks (Grover's algorithm) only reduce AES-256 security to 128-bit equivalence — still far beyond any foreseeable computational attack</li>
-    <li>The ability to brute-force a six-word diceware passphrase at any realistic timescale when protected by Argon2id with a 4 GiB memory parameter</li>
-    <li>A method to decrypt the drive without the passphrase, keyfile, or hardware token</li>
-    <li>A way to prove the existence of a VeraCrypt hidden volume in the unallocated space of an outer volume</li>
-    <li>A way to detect that a partition is encrypted at all if you use a detached LUKS header</li>
+    <li>Any known practical mathematical attack against AES-256. Even theoretical quantum attacks (Grover's algorithm) only reduce AES-256 security to 128-bit equivalence — still far beyond any foreseeable computational attack</li>
+    <li>A practical path to brute-force a genuinely random six-word diceware passphrase when protected by Argon2id with a 4 GiB memory parameter</li>
+    <li>A method to decrypt the powered-off drive without the passphrase, keyfile, hardware token, seized header/key backup, or decrypted filesystem access</li>
+    <li>A way to prove a VeraCrypt hidden volume from ciphertext alone in the unallocated space of an outer volume</li>
+    <li>A LUKS signature to identify when you use a detached LUKS header; this does not prevent an examiner from inferring that random-looking data may be encrypted</li>
   </ul>
 
   <p><strong>What they will do in practice — in order:</strong></p>
@@ -389,7 +389,7 @@
   </table>
 
   <h3>Five Foundational Principles</h3>
-  <p><strong>Principle 1: Encryption at rest is your primary defense.</strong> Everything else is defense in depth. A properly encrypted, powered-off drive resists all known cryptanalytic attacks by any actor — state, corporate, or academic.</p>
+  <p><strong>Principle 1: Encryption at rest is your primary defense.</strong> Everything else is defense in depth. Under the stated assumptions — strong passphrase, correct LUKS configuration, powered-off system, no plaintext written before encryption, no seized header/key backups, no compromised firmware/boot chain, and no decrypted filesystem access — a properly encrypted drive resists known practical cryptanalytic attacks by any actor: state, corporate, or academic.</p>
   <p><strong>Principle 2: Deniability matters when compulsion is a risk.</strong> Mathematical security alone is insufficient in authoritarian contexts where you can be legally or physically forced to provide the passphrase. Deniability changes the game: you provide the decoy passphrase and they see only what you intended them to see.</p>
   <p><strong>Principle 3: Data you don't have cannot be seized.</strong> Minimize what you store. Information that does not need to live on the drive should not exist on it. Use tmpfs (RAM-backed storage) for working data that does not need to survive a reboot.</p>
   <p><strong>Principle 4: Your passphrase is the weakest link after encryption itself.</strong> A passphrase you can remember is vulnerable to coercion. A short passphrase is vulnerable to brute force. These two constraints pull in opposite directions — diceware with Argon2id resolves this tension.</p>
@@ -424,7 +424,7 @@
     <li>The exact cipher and mode (AES-XTS-256)</li>
     <li>The PBKDF and its memory/iteration parameters (Argon2id, 4 GiB)</li>
     <li>How many key slots contain active keys</li>
-    <li>The anti-forensic split (the encrypted master key — useless without the passphrase)</li>
+    <li>The anti-forensic split (the encrypted master key — not usable without the passphrase or other key material)</li>
   </ul>
   <p>This information allows the forensics team to calibrate their brute-force attack precisely to your configuration.</p>
 
@@ -469,16 +469,17 @@ hashcat -m 32100 -a 0 header.img targeted.txt</code></pre>
   <p><strong>Legal compulsion:</strong> Courts in many jurisdictions can order production of the decryption key. In authoritarian states, this order may be issued with no meaningful oversight or appeal mechanism. Refusal results in contempt charges, which can mean indefinite imprisonment until you comply.</p>
   <p><strong>Physical coercion ("rubber-hose cryptanalysis"):</strong> Detention, threats, or physical harm used to extract the passphrase. This is the operational reality in authoritarian contexts where rule of law is functionally absent. No amount of encryption prevents a determined human adversary from applying physical pressure — but plausible deniability (Chapter 15) allows you to provide a passphrase without surrendering your real data.</p>
 
-  <h3>What Forensics Cannot Do Against a Properly Configured System</h3>
+  <h3>What Forensics Can and Cannot Do Under Specific Assumptions</h3>
+  <p class="note">The limits below assume a strong passphrase, correct LUKS configuration, a powered-off system at seizure, no plaintext written before encryption, no LUKS header or key backups seized, no compromised firmware or boot chain, and no access to the decrypted filesystem. If any assumption fails, the conclusion may fail too.</p>
   <table>
     <tr><th>Capability</th><th>Possible?</th><th>Reason</th></tr>
     <tr><td>Break AES-256 encryption</td><td>No</td><td>No known attack; even quantum resistance is adequate at 256 bits</td></tr>
-    <tr><td>Brute-force a 6-word diceware passphrase</td><td>No</td><td>Physically impossible timescales with Argon2id 4 GiB</td></tr>
-    <tr><td>Recover data from a LUKS drive without the key</td><td>No</td><td>Ciphertext is indistinguishable from random noise</td></tr>
-    <tr><td>Prove a VeraCrypt hidden volume exists</td><td>No</td><td>Unallocated outer-volume space has a valid cryptographic explanation as random noise</td></tr>
-    <tr><td>Detect encryption when the header is detached</td><td>No</td><td>The partition contains only raw AES-XTS output — no signature</td></tr>
-    <tr><td>Recover files deleted from an encrypted SSD</td><td>No</td><td>All physical NAND cells contain only ciphertext (see Chapter 12)</td></tr>
-    <tr><td>Extract the LUKS key from a powered-off machine</td><td>No</td><td>Key exists only in RAM while the drive is actively mounted</td></tr>
+    <tr><td>Brute-force a 6-word diceware passphrase</td><td>Not practical under the assumptions</td><td>Expected timescales are beyond practical use with Argon2id 4 GiB and a genuinely random six-word diceware passphrase</td></tr>
+    <tr><td>Recover data from a LUKS drive without the key</td><td>Not practical under the assumptions</td><td>The protected content remains ciphertext absent the passphrase/key material, header, or mounted plaintext access</td></tr>
+    <tr><td>Prove a VeraCrypt hidden volume exists</td><td>Not from ciphertext alone under the assumptions</td><td>Unallocated outer-volume space has a valid cryptographic explanation as random padding, though surrounding artifacts may affect deniability</td></tr>
+    <tr><td>Detect a LUKS volume when the header is detached</td><td>No LUKS signature on the data partition</td><td>A detached header removes the LUKS magic signature and parameters from the partition, but it does not guarantee an examiner cannot infer that random-looking data may be encrypted</td></tr>
+    <tr><td>Recover files deleted from an encrypted SSD</td><td>Not as plaintext under the assumptions</td><td>If no plaintext was written before encryption and there is no decrypted filesystem access, raw NAND should expose ciphertext rather than readable deleted files (see Chapter 12)</td></tr>
+    <tr><td>Extract the LUKS key from a powered-off machine</td><td>Not expected under the assumptions</td><td>Key material should not persist on disk and normally exists in RAM only while the volume is open; recently powered-off systems and compromised firmware are separate risks</td></tr>
   </table>
 </section>
 
@@ -1280,15 +1281,15 @@ exec swayidle -w \
 
   <h3>The Tools State Forensics Teams Actually Use</h3>
 
-  <p><strong>Cellebrite UFED 4PC</strong> — Primarily a mobile forensics tool adapted for PC use. Can perform physical and logical acquisition. Recognized in courts worldwide. The 4PC version specifically targets Windows, macOS, and Linux systems on laptop/desktop hardware. Does not decrypt LUKS.</p>
+  <p><strong>Cellebrite UFED 4PC</strong> — Primarily a mobile forensics tool adapted for PC use. Can perform physical and logical acquisition. Recognized in courts worldwide. The 4PC version specifically targets Windows, macOS, and Linux systems on laptop/desktop hardware. It does not decrypt a correctly configured, powered-off LUKS volume under the assumptions in this guide.</p>
 
-  <p><strong>Magnet AXIOM</strong> — Comprehensive platform covering cloud, mobile, and computer forensics. Exceptional at reconstructing user activity from application artifacts: browser history (including incognito sessions via RAM carving on live systems), email databases, messaging applications, recently opened documents, and cloud sync artifacts. Against a decrypted drive, AXIOM builds a detailed behavioral timeline automatically. Cannot decrypt LUKS.</p>
+  <p><strong>Magnet AXIOM</strong> — Comprehensive platform covering cloud, mobile, and computer forensics. Exceptional at reconstructing user activity from application artifacts: browser history (including incognito sessions via RAM carving on live systems), email databases, messaging applications, recently opened documents, and cloud sync artifacts. Against a decrypted drive, AXIOM builds a detailed behavioral timeline automatically. Does not decrypt a correctly configured, powered-off LUKS volume under the assumptions in this guide.</p>
 
-  <p><strong>EnCase (OpenText)</strong> — The industry standard for corporate and law enforcement forensics globally. Powerful timeline analysis, file carving, and hash-set matching (identifies known files by their SHA-256 hash without opening them). Courts accept EnCase reports as standard evidence. Cannot decrypt LUKS.</p>
+  <p><strong>EnCase (OpenText)</strong> — The industry standard for corporate and law enforcement forensics globally. Powerful timeline analysis, file carving, and hash-set matching (identifies known files by their SHA-256 hash without opening them). Courts accept EnCase reports as standard evidence. Does not decrypt a correctly configured, powered-off LUKS volume under the assumptions in this guide.</p>
 
   <p><strong>FTK (Forensic Toolkit / Exterro)</strong> — Similar to EnCase, preferred in some agencies for large-scale multi-drive investigations. Has integrated GPU-accelerated passphrase recovery modules that interface directly with HashCat for LUKS attacks.</p>
 
-  <p><strong>Passware Kit Forensic / Elcomsoft Distributed Password Recovery</strong> — Dedicated GPU-accelerated passphrase recovery tools. Can attack LUKS passphrases at high speed for simple KDFs. With Argon2id at 4 GiB, attack rates drop to less than 1 attempt per 2 seconds per GPU. Against a 6-word diceware passphrase, this is not an attack — it is theater.</p>
+  <p><strong>Passware Kit Forensic / Elcomsoft Distributed Password Recovery</strong> — Dedicated GPU-accelerated passphrase recovery tools. Can attack LUKS passphrases at high speed for simple KDFs. With Argon2id at 4 GiB, attack rates drop to less than 1 attempt per 2 seconds per GPU. Against a genuinely random 6-word diceware passphrase, correct LUKS configuration, no seized key/header backups, and no decrypted filesystem access, this is not a practical recovery path.</p>
 
   <h3>What a Forensic Examiner Does With Your Drive, Step by Step</h3>
 
@@ -1302,7 +1303,7 @@ cryptsetup luksDump /dev/sdX2
 # - PBKDF: argon2id
 # - Memory: 4194304 (4 GiB)
 # - Active key slots: however many you have
-# - Anti-forensic split: the encrypted master key (useless without passphrase)
+# - Anti-forensic split: the encrypted master key (not usable without the passphrase or other key material)
 
 # This lets them calculate exact attack parameters before starting</code></pre>
 
@@ -1324,7 +1325,7 @@ hashcat -m 32100 -a 0 header.img wordlist.txt -r best64.rule
   <p>The /boot partition is unencrypted and will be fully examined. A careful analyst will look at every file in the EFI partition, including timestamps of file creation and modification, which reveals when the system was last updated. Limit the EFI partition contents to the minimum required: bootloader binary, kernel image, initramfs. Never store any data in /boot beyond what the boot process requires.</p>
 
   <p><strong>Phase 4 — Reporting:</strong></p>
-  <p>If decryption fails, the forensic report states: "The device contains a LUKS2-encrypted partition using Argon2id key derivation. Passphrase recovery was not successful. The contents of the encrypted partition could not be examined." The drive is returned or held as exhibit.</p>
+  <p>If decryption fails under these assumptions — strong passphrase, correct LUKS configuration, powered-off seizure, no plaintext written before encryption, no seized header/key backups, no compromised firmware/boot chain, and no decrypted filesystem access — the forensic report may state: "The device contains a LUKS2-encrypted partition using Argon2id key derivation. Passphrase recovery was not successful. The contents of the encrypted partition could not be examined." The drive is returned or held as exhibit.</p>
 
   <h3>After Decryption: What a Thorough Examiner Finds</h3>
   <p>If an examiner does obtain the passphrase (via coercion or a weak passphrase), they will conduct a thorough examination of the decrypted volume. They use automated pipelines that analyze:</p>
@@ -1357,7 +1358,7 @@ hashcat -m 32100 -a 0 header.img wordlist.txt -r best64.rule
     <li>The original cell joins the "garbage collection queue" — it will be erased when the FTL decides to run GC, which may be hours, days, or never before forensic imaging</li>
   </ol>
 
-  <p><strong>Over-provisioning:</strong> Consumer SSDs typically have 7–28% more physical NAND than their rated capacity. A "500 GB" SSD physically contains 540–640 GB of flash. The extra cells are used as spare area for wear leveling and bad block replacement. This spare area is completely invisible to any operating system command — <code>dd</code>, <code>shred</code>, and <code>wipe</code> cannot reach it.</p>
+  <p><strong>Over-provisioning:</strong> Consumer SSDs typically have 7–28% more physical NAND than their rated capacity. A "500 GB" SSD physically contains 540–640 GB of flash. The extra cells are used as spare area for wear leveling and bad block replacement. This spare area is normally outside the logical block interface exposed to the operating system, so commands such as <code>dd</code>, <code>shred</code>, and <code>wipe</code> should not be relied on to reach it.</p>
 
   <p><strong>The consequence:</strong> Standard Linux tools designed for HDD data destruction (<code>shred</code>, <code>wipe</code>, <code>srm</code>, <code>secure-delete</code>) <strong>do not reliably delete data on SSDs</strong>. They overwrite the logical address, but the physical NAND cell that previously held that data may remain intact and readable.</p>
 
@@ -1365,18 +1366,18 @@ hashcat -m 32100 -a 0 header.img wordlist.txt -r best64.rule
   <p>Three approaches exist for SSD forensics that bypass the standard SATA/USB interface:</p>
   <ul>
     <li><strong>PC-3000 Flash (ACE Lab):</strong> The industry standard for NAND chip-off and in-system forensics. Communicates with the SSD controller using manufacturer-specific diagnostic commands, bypassing the normal FTL entirely. Can access raw NAND data including over-provisioned area.</li>
-    <li><strong>Chip-off:</strong> Physically remove the NAND chips from the PCB, connect them to a specialized reader, and read the raw NAND pages directly. No encryption = full data recovery. With encryption = only ciphertext.</li>
+    <li><strong>Chip-off:</strong> Physically remove the NAND chips from the PCB, connect them to a specialized reader, and read the raw NAND pages directly. No encryption can mean broad data recovery. With full-drive encryption in place before plaintext is ever written, raw NAND should yield ciphertext rather than readable files.</li>
     <li><strong>JTAG / ISP:</strong> Connect directly to debug ports on the SSD controller chip to extract firmware, configuration, or data through the chip's debug interface.</li>
   </ul>
 
   <div class="key-point">
-    The solution to all of these techniques is identical: encrypt the entire drive before writing any data to it. If every physical NAND cell — including over-provisioned spare area — contains only AES-256-XTS ciphertext from the moment the drive was first used, chip-off forensics recovers only random-looking noise. This is why Chapter 6 (disk sanitization) and Chapter 7 (LUKS creation) must be done in that order, before the OS is installed.
+    The solution to all of these techniques is identical: encrypt the entire drive before writing any data to it. If every physical NAND cell — including over-provisioned spare area — contains only AES-256-XTS ciphertext from the moment the drive was first used, and if the passphrase is strong, LUKS is configured correctly, the system is powered off, no header/key backups are seized, the firmware/boot chain is not compromised, and the examiner lacks decrypted filesystem access, chip-off forensics should recover only random-looking ciphertext. This is why Chapter 6 (disk sanitization) and Chapter 7 (LUKS creation) must be done in that order, before the OS is installed.
   </div>
 
   <h3>TRIM on an Encrypted Drive: Trade-offs</h3>
   <p>TRIM is a command the OS sends to the SSD saying "these blocks are no longer in use; you may erase them." It helps maintain SSD performance over time by allowing the FTL to pre-erase blocks before they need to be rewritten.</p>
-  <p><strong>Security trade-off:</strong> TRIM leaks information to a physical attacker. By analyzing which logical blocks the SSD reports as discarded, a forensic examiner who accesses the NAND directly can determine the approximate size and layout of your filesystem's used space — even without decrypting anything. They cannot read the data, but they can infer patterns.</p>
-  <p>For most threat models, TRIM provides a net benefit (drive health + some anti-forensic clearing) and should be enabled. For maximum deniability with hidden VeraCrypt volumes (Chapter 15), disable TRIM — a hidden volume must make the outer volume's unallocated space indistinguishable from random data, which TRIM can disrupt.</p>
+  <p><strong>Security trade-off:</strong> TRIM leaks information to a physical attacker. By analyzing which logical blocks the SSD reports as discarded, a forensic examiner who accesses the NAND directly can estimate the approximate size and layout of your filesystem's used space — even without decrypting anything. Under the assumptions above, they should not be able to read file contents from those blocks, but they can infer patterns.</p>
+  <p>For most threat models, TRIM provides a net benefit (drive health + some anti-forensic clearing) and should be enabled. For maximum deniability with hidden VeraCrypt volumes (Chapter 15), disable TRIM — a hidden volume depends on the outer volume's unallocated space remaining consistent with random data, which TRIM can disrupt.</p>
 <pre><code># Enable TRIM passthrough in /etc/crypttab (most threat models):
 cryptroot  UUID=&lt;uuid&gt;  none  luks,discard
 
@@ -1741,12 +1742,12 @@ cryptsetup luksDump /dev/sdX2 | grep -c "luks2"</code></pre>
   <p>By default, the LUKS2 header sits at the very beginning of the encrypted partition. This 16 MB structure contains everything needed to identify the drive as LUKS-encrypted and to begin a passphrase attack: the magic signature, cipher parameters, PBKDF configuration, and the anti-forensic split (encrypted master key). Any forensic tool will immediately detect it.</p>
 
   <h3>What a Detached Header Achieves</h3>
-  <p>When the LUKS header is stored separately from the encrypted data, the encrypted partition contains <em>only</em> AES-XTS ciphertext — completely indistinguishable from random noise. Without the header file:</p>
+  <p>When the LUKS header is stored separately from the encrypted data, the encrypted partition contains AES-XTS ciphertext and no LUKS header. Under the assumptions of a strong passphrase, correct LUKS configuration, powered-off system, no plaintext written before encryption, no seized header/key backups, no compromised firmware/boot chain, and no decrypted filesystem access, the detached-header design removes the LUKS signature from the data partition. It does <em>not</em> guarantee that an examiner cannot infer that random-looking data may be encrypted. Without the header file:</p>
   <ul>
-    <li>The partition shows no LUKS magic signature — no encryption is detected by any tool</li>
-    <li>Cipher parameters are not revealed — no one can even begin an attack</li>
-    <li>The existence of encryption cannot be proven — "I don't know what that partition is" is a credible statement</li>
-    <li>Possessing the drive without the header is useless — even the passphrase alone is insufficient to decrypt</li>
+    <li>The partition shows no LUKS magic signature, so tools should not identify it as LUKS from a header on that partition</li>
+    <li>Cipher parameters are not revealed from the data partition alone, so an offline LUKS passphrase attack requires the detached header or a seized header backup</li>
+    <li>The LUKS signature is absent, but random-looking data can still support an inference that the partition may be encrypted; deniability depends on the surrounding facts</li>
+    <li>Possessing only the powered-off drive, without the detached header or a header backup, should be insufficient to decrypt even if a passphrase is later obtained</li>
   </ul>
 
   <h3>Creating a LUKS Volume with a Detached Header</h3>
@@ -1808,7 +1809,7 @@ echo -n "header-encryption-passphrase" | ssss-split -t 3 -n 5
 ssss-combine -t 3
 # Enter 3 of the 5 shares when prompted — passphrase is reconstructed</code></pre>
 
-  <p>Practical outcome: an adversary must reach and successfully coerce three different people in three different countries simultaneously. If any one of them cannot be reached or refuses to cooperate, the data is permanently inaccessible — including to you, so ensure the distribution is managed carefully.</p>
+  <p>Practical outcome: if the header-encryption passphrase is split 3-of-5 and no complete header, key backup, or decrypted filesystem is seized, an adversary would need three valid shares to reconstruct it. If fewer than three shares are available, the data should remain inaccessible — including to you, so ensure the distribution is managed carefully.</p>
 </section>
 
 <!-- Chapter 17 -->
