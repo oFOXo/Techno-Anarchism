@@ -533,19 +533,28 @@ hashcat -m 32100 -a 0 header.img targeted.txt</code></pre>
   </table>
 
   <h3>Recommended Enclosures</h3>
-  <p>Key requirements: UASP support (required for performance), TRIM passthrough (required for drive health and counter-forensics), no firmware interception of commands.</p>
+  <p>Key requirements: UASP support (required for performance), working Linux discard support (useful when your threat model allows TRIM), and no firmware interception of commands.</p>
   <table>
     <tr><th>Enclosure</th><th>Notes</th></tr>
-    <tr><td>Sabrent EC-UASP</td><td>USB 3.2 Gen 1, UASP, widely available, no known quirks with Linux TRIM passthrough.</td></tr>
+    <tr><td>Sabrent EC-UASP</td><td>USB 3.2 Gen 1, UASP, widely available, no known quirks with Linux discard support.</td></tr>
     <tr><td>Inateck FE2011</td><td>Compact, toolless entry, solid build quality.</td></tr>
     <tr><td>OWC Express USB-C</td><td>Higher build quality; good Linux compatibility record.</td></tr>
     <tr><td>ORICO 2139C3 (transparent)</td><td>The transparent shell lets you visually inspect the PCB for unexpected hardware without opening the enclosure — useful for anti-tamper checks.</td></tr>
   </table>
 
-  <p>Verify TRIM passthrough is functional after connecting the drive:</p>
+  <h3>TRIM / Discard Decision</h3>
+  <p>Use the same TRIM/discard recommendation here and in Chapter 12: enable it for normal encrypted-system maintenance, disable it when allocation-pattern concealment matters more, and prefer periodic manual <code>fstrim</code> over continuous <code>discard</code> when you want performance maintenance with less continuous leakage.</p>
+  <table>
+    <tr><th>Threat-model goal</th><th>Recommendation</th><th>Reason</th></tr>
+    <tr><td>Performance, SSD longevity, and normal encrypted-system use</td><td>Enable TRIM/discard</td><td>Allows the SSD to clean unused blocks, maintain write performance, and reduce unnecessary wear.</td></tr>
+    <tr><td>Plausible deniability, hidden volumes, or allocation-pattern concealment</td><td>Disable TRIM/discard</td><td>Prevents discarded-block maps from revealing which regions are unused or disrupting hidden-volume assumptions.</td></tr>
+    <tr><td>Performance maintenance with less continuous leakage</td><td>Prefer periodic manual <code>fstrim</code> over continuous <code>discard</code></td><td>Batches discard events instead of exposing allocation changes as they happen.</td></tr>
+  </table>
+
+  <p>Verify discard support after connecting the drive if you plan to enable TRIM or run periodic <code>fstrim</code>:</p>
 <pre><code>lsblk --discard /dev/sdX
 # DISC-GRAN and DISC-MAX must both be non-zero
-# A zero value means TRIM is not passing through the enclosure</code></pre>
+# A zero value means discard is not passing through the enclosure</code></pre>
 </section>
 
 <!-- Chapter 4 -->
@@ -1425,15 +1434,24 @@ hashcat -m 32100 -a 0 header.img wordlist.txt -r best64.rule
   <h3>TRIM on an Encrypted Drive: Trade-offs</h3>
   <p>TRIM is a command the OS sends to the SSD saying "these blocks are no longer in use; you may erase them." It helps maintain SSD performance over time by allowing the FTL to pre-erase blocks before they need to be rewritten.</p>
   <p><strong>Security trade-off:</strong> TRIM leaks information to a physical attacker. By analyzing which logical blocks the SSD reports as discarded, a forensic examiner who accesses the NAND directly can determine the approximate size and layout of your filesystem's used space — even without decrypting anything. They cannot read the data, but they can infer patterns.</p>
-  <p>For most threat models, TRIM provides a net benefit (drive health + some anti-forensic clearing) and should be enabled. For maximum deniability with hidden VeraCrypt volumes (Chapter 15), disable TRIM — a hidden volume must make the outer volume's unallocated space indistinguishable from random data, which TRIM can disrupt.</p>
-<pre><code># Enable TRIM passthrough in /etc/crypttab (most threat models):
+  <p>Use the same TRIM/discard recommendation here and in Chapter 3: enable it for normal encrypted-system maintenance, disable it when allocation-pattern concealment matters more, and prefer periodic manual <code>fstrim</code> over continuous <code>discard</code> when you want performance maintenance with less continuous leakage.</p>
+  <table>
+    <tr><th>Threat-model goal</th><th>Recommendation</th><th>Reason</th></tr>
+    <tr><td>Performance, SSD longevity, and normal encrypted-system use</td><td>Enable TRIM/discard</td><td>Allows the SSD to clean unused blocks, maintain write performance, and reduce unnecessary wear.</td></tr>
+    <tr><td>Plausible deniability, hidden volumes, or allocation-pattern concealment</td><td>Disable TRIM/discard</td><td>Prevents discarded-block maps from revealing which regions are unused or disrupting hidden-volume assumptions.</td></tr>
+    <tr><td>Performance maintenance with less continuous leakage</td><td>Prefer periodic manual <code>fstrim</code> over continuous <code>discard</code></td><td>Batches discard events instead of exposing allocation changes as they happen.</td></tr>
+  </table>
+<pre><code># Enable discard in /etc/crypttab when your threat model allows TRIM:
 cryptroot  UUID=&lt;uuid&gt;  none  luks,discard
 
 # Or when opening manually:
 cryptsetup open --allow-discards /dev/sdX2 cryptroot
 
-# To disable TRIM entirely (maximum deniability with hidden volumes):
-# Simply omit the 'discard' option — TRIM is off by default</code></pre>
+# Preferred maintenance option for less continuous leakage:
+fstrim -v /
+
+# To disable TRIM/discard for deniability or allocation-pattern concealment:
+# Omit the 'discard' option — TRIM is off by default</code></pre>
 
   <h3>Making Specific Files Truly Unrecoverable</h3>
 <pre><code># Option 1 (best): Never write to disk — use RAM-backed tmpfs for sensitive work
