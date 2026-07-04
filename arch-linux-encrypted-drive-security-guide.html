@@ -789,6 +789,8 @@ wget https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
   </ul>
 
   <h3>Creating the LUKS2 Volume</h3>
+
+  <p><strong>Recommended boot-root profile: LUKS2 + Argon2id, without dm-integrity.</strong> Use this for the root filesystem you expect your bootloader and initramfs to unlock reliably. It preserves broad compatibility while still using a strong memory-hard PBKDF.</p>
 <pre><code>cryptsetup luksFormat \
   --type luks2 \
   --cipher aes-xts-plain64 \
@@ -798,13 +800,29 @@ wget https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
   --pbkdf-memory 4194304 \
   --pbkdf-parallel 4 \
   --pbkdf-force-iterations 6 \
-  --iter-time 10000 \
-  --integrity hmac-sha256 \
   --sector-size 4096 \
   /dev/sdX2
 
 # You must type YES (uppercase) to confirm
 # Then enter your diceware passphrase twice</code></pre>
+
+  <p><strong>Advanced authenticated-encryption profile: LUKS2 + Argon2id + dm-integrity.</strong> Use this only after confirming your exact boot chain supports it: firmware, bootloader strategy, kernel, initramfs generator, cryptsetup hooks, kernel command line, and recovery media. Many bootloaders cannot unlock LUKS2 volumes that use dm-integrity directly; even when the bootloader only loads an unencrypted kernel and initramfs from the EFI System Partition, the initramfs must still include the right modules and cryptsetup support to activate the root volume.</p>
+<pre><code>cryptsetup luksFormat \
+  --type luks2 \
+  --cipher aes-xts-plain64 \
+  --key-size 512 \
+  --hash sha512 \
+  --pbkdf argon2id \
+  --pbkdf-memory 4194304 \
+  --pbkdf-parallel 4 \
+  --pbkdf-force-iterations 6 \
+  --integrity hmac-sha256 \
+  --sector-size 4096 \
+  /dev/sdX2</code></pre>
+
+  <div class="warning">
+    <strong>Do not choose dm-integrity casually.</strong> It consumes additional space for per-sector authentication tags and metadata, increases writes and write amplification, can reduce SSD endurance, and makes disaster recovery more complex because corruption, missing integrity metadata, or unsupported recovery environments can turn reads into I/O errors instead of returning unauthenticated plaintext. Test this profile on the actual target hardware and with the exact rescue media you plan to rely on before storing sensitive data.
+  </div>
 
   <p><strong>Every parameter explained — do not skip this section:</strong></p>
 
@@ -818,13 +836,17 @@ wget https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
   Argon2id won the Password Hashing Competition in 2015 after peer review by hundreds of cryptographers. It is a memory-hard function — correctly computing it requires holding a configurable amount of RAM (not just time). This is decisive against GPU-based and ASIC-based attacks. A GPU cluster that can test billions of SHA-256 hashes per second is constrained by available RAM when testing Argon2id — each attempt requires holding the full memory parameter simultaneously. Argon2id specifically combines two Argon2 variants to resist both side-channel attacks (from the "Argon2i" component) and time-memory tradeoff attacks (from the "Argon2d" component).</p>
 
   <p><code>--pbkdf-memory 4194304</code><br>
-  4,194,304 KiB = 4 GiB of RAM required per password attempt. This is the primary cost that makes GPU cracking impractical. A GPU with 24 GB VRAM can test only 6 passwords in parallel. Compare this to SHA-256, where the same GPU can test billions in parallel. The 4 GiB parameter also means this unlock will be slow on your own machine (10+ seconds) — this is intentional and appropriate.</p>
+  4,194,304 KiB = 4 GiB of RAM required per password attempt. This is the primary cost that makes GPU cracking impractical. A GPU with 24 GB VRAM can test only 6 passwords in parallel. Compare this to SHA-256, where the same GPU can test billions in parallel. The 4 GiB parameter also means this unlock will be slow on your own machine (10+ seconds) — this is intentional and appropriate on machines that can spare the memory during early boot.</p>
 
-  <p><code>--pbkdf-force-iterations 6</code> and <code>--iter-time 10000</code><br>
-  Six passes over the full 4 GiB memory region, plus 10 seconds of time-based computation regardless of hardware speed. Together, a single unlock attempt takes at minimum 10–15 seconds on modern hardware. This further compounds the Argon2id protection.</p>
+  <div class="warning">
+    <strong>RAM compatibility warning:</strong> <code>--pbkdf-memory 4194304</code> can fail on systems with limited RAM, firmware-reserved memory, memory-constrained initramfs environments, or rescue media that cannot allocate 4 GiB at unlock time. Before storing sensitive data, boot the installed system and your recovery media, then verify that you can unlock the volume from the target initramfs. If it fails, recreate the volume with a lower memory value that your real boot environment can reliably allocate.
+  </div>
 
-  <p><code>--integrity hmac-sha256</code><br>
-  Enables dm-integrity: every 4096-byte sector of encrypted data receives an HMAC-SHA256 authentication tag. If any byte of ciphertext is modified on disk — whether by accident, by a forensic tool probing the cipher, or by a sophisticated active attack — the integrity check fails and the read returns an I/O error rather than silently returning potentially useful modified plaintext. This closes a class of "chosen-ciphertext attacks" where an adversary who can modify the encrypted data and observe the system's behavior can learn information about the plaintext.</p>
+  <p><code>--pbkdf-force-iterations 6</code><br>
+  This guide uses a fixed Argon2id cost: six passes over the full 4 GiB memory region. It does <em>not</em> also use <code>--iter-time</code> as an additional stacked delay. In cryptsetup, <code>--iter-time</code> is the calibration mode: cryptsetup benchmarks the current machine and chooses a PBKDF cost intended to take approximately that long. <code>--pbkdf-force-iterations</code> bypasses that calibration and records the explicit cost you requested. Choose one approach. This guide chooses fixed iterations so the documented LUKS header has predictable Argon2 parameters; if you prefer hardware-calibrated unlock time, omit <code>--pbkdf-force-iterations</code> and use <code>--iter-time 10000</code> instead.</p>
+
+  <p><code>--integrity hmac-sha256</code> <strong>(advanced profile only)</strong><br>
+  Enables dm-integrity: every 4096-byte sector of encrypted data receives an HMAC-SHA256 authentication tag. If any byte of ciphertext is modified on disk — whether by accident, by a forensic tool probing the cipher, or by a sophisticated active attack — the integrity check fails and the read returns an I/O error rather than silently returning potentially useful modified plaintext. This closes a class of "chosen-ciphertext attacks" where an adversary who can modify the encrypted data and observe the system's behavior can learn information about the plaintext. The tradeoff is operational: extra metadata reduces usable capacity, every write must update integrity data, unsupported boot or rescue environments may not open the volume, and recovery becomes harder after corruption.</p>
 
   <p><code>--sector-size 4096</code><br>
   Modern SSDs use 4096-byte physical sectors internally. Aligning the LUKS sector size to 4096 bytes ensures each encrypted sector maps directly to one physical sector, maximizing performance and eliminating read-modify-write cycles.</p>
@@ -1765,7 +1787,6 @@ cryptsetup luksFormat \
   --pbkdf-memory 4194304 \
   --pbkdf-parallel 4 \
   --pbkdf-force-iterations 6 \
-  --iter-time 10000 \
   /dev/sdX2
   # /dev/sdX2 itself receives NOTHING — no header, no signature
 
