@@ -1445,7 +1445,6 @@ exten => _1XXX,1,NoOp(Call to ${EXTEN})
  same => n,Hangup()
 
 <span class="c">; Conference bridge for group calls</span>
-[internal]
 exten => 9000,1,NoOp(Join conference)
  same => n,ConfBridge(main,default_bridge,default_user)
  same => n,Hangup()</code></pre>
