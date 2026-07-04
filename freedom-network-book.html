@@ -1409,7 +1409,7 @@ protocol=ws
 bind=0.0.0.0:8088
 
 <span class="c">; Template for all endpoints</span>
-[endpoint-template]
+[endpoint-template](!)
 type=endpoint
 context=internal
 disallow=all
@@ -1422,20 +1422,21 @@ use_avpf=yes             <span class="c">; required for WebRTC</span>
 bundle=yes
 
 <span class="c">; Example user — Alice (extension 1001)</span>
-[alice]
+[alice](endpoint-template)
 type=endpoint
-!= endpoint-template
 auth=alice-auth
-aors=alice
+aors=alice-aor
 [alice-auth]
 type=auth
 auth_type=userpass
 username=alice
 password=fr33d0m!
-[alice]
+[alice-aor]
 type=aor
 max_contacts=2
 remove_existing=yes</code></pre>
+
+  <p><strong>Note:</strong> WebRTC endpoints usually require DTLS-SRTP endpoint settings plus HTTPS/WSS support for browser clients. The TLS/SRTP configuration above is a minimal starting point; adapt it for your chosen clients, certificate setup, NAT traversal, and Asterisk version.</p>
 
   <div class="code-header">📄 /etc/asterisk/extensions.conf — dialplan</div>
 <pre><code>[internal]
