@@ -1056,6 +1056,9 @@ grub-mkconfig -o /boot/grub/grub.cfg</code></pre>
   <h4>Boot path: remove or bypass GRUB</h4>
   <p>The recommended UKI path is to boot the signed UKI directly from UEFI and remove GRUB from the normal boot path. You may leave GRUB installed only as a disabled recovery entry, but do not use unsigned GRUB menu entries as the primary path. If a firmware cannot boot the UKI directly, GRUB should only chainload the already signed UKI and must not provide an editable unsigned kernel command line.</p>
 
+  <h3>Secure Boot with Custom Keys</h3>
+  <p>Default Secure Boot uses Microsoft's signing keys. This means Microsoft can sign software that boots on your machine — and by extension, so can anyone who compromises Microsoft's infrastructure or obtains a code-signing certificate under their CA hierarchy. For your threat model, decide whether you want maximum owner control or broader hardware compatibility.</p>
+<pre><code>pacman -S sbctl
   <h4>systemd initramfs hooks and crypttab flow</h4>
 <pre><code>vim /etc/mkinitcpio.conf
 
@@ -1067,6 +1070,16 @@ mkinitcpio -P
 # Identify the LUKS partition UUID
 blkid /dev/sdX2
 
+# Option 1: maximum control. Enroll only your keys.
+# Only owner-signed EFI binaries should boot, but some hardware,
+# expansion-card option ROMs, firmware updaters, or recovery workflows may break.
+sbctl enroll-keys
+
+# Option 2: compatibility mode. Enroll your keys and preserve Microsoft's keys.
+# Microsoft-signed binaries remain trusted, which improves compatibility with some
+# drivers and option ROMs but weakens any "only I can sign boot code" claim.
+# Use this instead of the maximum-control command if your hardware requires it.
+# sbctl enroll-keys --microsoft
 # Configure systemd-cryptsetup in the initramfs.
 # For passphrase-only boot, omit the fido2/tpm2 options.
 cat > /etc/crypttab.initramfs &lt;&lt; 'EOF'
