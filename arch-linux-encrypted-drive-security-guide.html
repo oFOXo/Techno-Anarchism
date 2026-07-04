@@ -1738,7 +1738,12 @@ cryptsetup luksDump /dev/sdX2 | grep -c "luks2"</code></pre>
   </div>
 
   <h3>The Problem with a Standard LUKS Header</h3>
-  <p>By default, the LUKS2 header sits at the very beginning of the encrypted partition. This 16 MB structure contains everything needed to identify the drive as LUKS-encrypted and to begin a passphrase attack: the magic signature, cipher parameters, PBKDF configuration, and the anti-forensic split (encrypted master key). Any forensic tool will immediately detect it.</p>
+  <p>By default, the LUKS2 header sits at the very beginning of the encrypted partition. The exact metadata and keyslot layout depends on the LUKS version, cryptsetup version, and formatting options. Inspect the volume you actually created instead of relying on a fixed-size claim: the header contains the magic signature, cipher parameters, PBKDF configuration, JSON metadata, keyslot areas, and encrypted key material needed to begin an offline passphrase attack. Any forensic tool will immediately detect an attached header.</p>
+<pre><code># Inspect an attached-header LUKS volume
+cryptsetup luksDump /dev/sdX2
+
+# Inspect a volume that uses a detached header file
+cryptsetup luksDump --header /path/to/luks-header.img /dev/sdX2</code></pre>
 
   <h3>What a Detached Header Achieves</h3>
   <p>When the LUKS header is stored separately from the encrypted data, the encrypted partition contains <em>only</em> AES-XTS ciphertext — completely indistinguishable from random noise. Without the header file:</p>
@@ -1750,9 +1755,11 @@ cryptsetup luksDump /dev/sdX2 | grep -c "luks2"</code></pre>
   </ul>
 
   <h3>Creating a LUKS Volume with a Detached Header</h3>
+  <p>Create detached-header files conservatively. Use 32 MiB or larger unless the cryptsetup documentation for your exact version and selected options confirms that a smaller file is enough. After formatting, verify the metadata and keyslot layout with <code>cryptsetup luksDump --header</code> and test backup, restore, and unlock on disposable media before relying on the procedure for real data.</p>
 <pre><code># The header will live on a separate device — NOT on the encrypted drive
-# First create the header file (16 MiB is sufficient for LUKS2 + multiple key slots)
-truncate -s 16M /tmp/luks-header.img
+# Create a conservative detached-header file; use a larger size if your
+# cryptsetup version, options, or future keyslot plans require it.
+truncate -s 32M /tmp/luks-header.img
 
 # Format the encrypted partition — the header goes into the separate file
 cryptsetup luksFormat \
@@ -1769,8 +1776,26 @@ cryptsetup luksFormat \
   /dev/sdX2
   # /dev/sdX2 itself receives NOTHING — no header, no signature
 
+# Inspect the detached-header metadata/keyslot layout that was created
+cryptsetup luksDump --header /tmp/luks-header.img /dev/sdX2
+
 # Open the encrypted partition using the detached header
 cryptsetup open /dev/sdX2 cryptroot --header /tmp/luks-header.img</code></pre>
+
+  <h3>Practice Backup, Restore, and Unlock Before Trusting It</h3>
+  <p>Do this drill on a spare USB stick, loop device, or other disposable target first. The goal is to prove that your header size, backup workflow, restoration workflow, and unlock command work with your installed cryptsetup version before you entrust irreplaceable data to them.</p>
+<pre><code># Example disposable-media drill — replace /dev/sdY2 only with a throwaway target
+truncate -s 32M /tmp/test-luks-header.img
+cryptsetup luksFormat --type luks2 --header /tmp/test-luks-header.img /dev/sdY2
+cryptsetup luksDump --header /tmp/test-luks-header.img /dev/sdY2
+cp /tmp/test-luks-header.img /tmp/test-luks-header.backup.img
+cryptsetup open --header /tmp/test-luks-header.backup.img /dev/sdY2 testcrypt
+cryptsetup close testcrypt
+
+# Simulate restoring the detached header file from backup, then unlock again
+cp /tmp/test-luks-header.backup.img /tmp/test-luks-header.restored.img
+cryptsetup open --header /tmp/test-luks-header.restored.img /dev/sdY2 testcrypt
+cryptsetup close testcrypt</code></pre>
 
   <h3>Storing the Detached Header Securely</h3>
   <p>The header file must be stored completely separately from the encrypted drive. The security model is two-factor physical: you need both the drive and the header to even attempt decryption.</p>
@@ -2025,7 +2050,7 @@ EOF</code></pre>
   </div>
 
   <div class="key-point">
-    Critical insight: you do not need to destroy the entire SSD. You only need to destroy the LUKS header — a 16 MB structure at the start of the partition. Without the header, the remaining ciphertext is permanently and mathematically unrecoverable regardless of computational power applied. The key slots and master key material exist only in those 16 MB. Destroying them makes the rest of the drive — however many gigabytes — permanently inaccessible.
+    Critical insight: you do not need to destroy the entire SSD, but you must destroy the active LUKS header material for the configuration you actually use. For an attached-header volume, that means the LUKS metadata and keyslot areas at the start of the encrypted partition; verify their layout with <code>cryptsetup luksDump /dev/sdX2</code> instead of assuming a universal fixed size. For a detached-header volume, destroying the partition start is not enough — the separate header file or device must also be destroyed. Without the correct header and keyslot material, the remaining ciphertext is permanently and mathematically unrecoverable regardless of computational power applied.
   </div>
 
   <h3>Method 1: Software Destruction (Fastest — Seconds)</h3>
@@ -2034,9 +2059,17 @@ EOF</code></pre>
 # Overwrites all key slots with random data — takes 1-2 seconds
 cryptsetup erase /dev/sdX2
 
-# Option B: dd random data over the header region
-# Overwrites the first 32 MiB (covers the LUKS header + margin) — takes 5-10 seconds
-dd if=/dev/urandom of=/dev/sdX bs=4K count=8192 conv=fsync
+# Option B: dd random data over the attached-header region
+# First verify the metadata/keyslot layout for this exact volume/version:
+cryptsetup luksDump /dev/sdX2
+# Then overwrite a conservative region at the start of the LUKS partition.
+# Adjust the count upward if luksDump/docs for your cryptsetup version require it.
+dd if=/dev/urandom of=/dev/sdX2 bs=4K count=8192 conv=fsync
+
+# Detached-header volumes are different: destroy every copy of the header file/device.
+# Inspect the detached header before planning destruction:
+cryptsetup luksDump --header /path/to/luks-header.img /dev/sdX2
+shred -u /path/to/luks-header.img
 
 # Option C: erase and immediately power off — most complete
 cryptsetup erase /dev/sdX2 && sync && poweroff -f</code></pre>
@@ -2048,7 +2081,9 @@ echo "EMERGENCY DESTROY — 3 seconds to abort with Ctrl+C"
 sleep 3
 logger -t emergency "DESTRUCTION INITIATED"
 cryptsetup erase /dev/sdX2 2>/dev/null || true
-dd if=/dev/urandom of=/dev/sdX bs=4K count=8192 conv=fsync 2>/dev/null || true
+dd if=/dev/urandom of=/dev/sdX2 bs=4K count=8192 conv=fsync 2>/dev/null || true
+# If using a detached header, destroy its separate storage too:
+# shred -u /path/to/luks-header.img 2>/dev/null || true
 sync
 poweroff -f
 EOF
@@ -2084,7 +2119,9 @@ cat > /usr/local/bin/trigger-nuke.sh &lt;&lt; 'EOF'
 #!/bin/bash
 logger -t emergency "NUKE TRIGGERED at $(date)"
 cryptsetup erase /dev/sdX2 2>/dev/null || true
-dd if=/dev/urandom of=/dev/sdX bs=4K count=8192 conv=fsync 2>/dev/null || true
+dd if=/dev/urandom of=/dev/sdX2 bs=4K count=8192 conv=fsync 2>/dev/null || true
+# If using a detached header, destroy its separate storage too:
+# shred -u /path/to/luks-header.img 2>/dev/null || true
 sync
 poweroff -f
 EOF
